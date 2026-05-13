@@ -76,18 +76,19 @@ bi_so101_sim/
 └── README.md                          # This file
 ```
 
-No files inside the `lerobot/` repository are modified. Everything is standalone.
+No files inside the `lerobot/` repository are modified. All project code is in this repository; LeRobot is used as an installed dependency.
 
 ---
 
 ## Prerequisites
 
 - **Python 3.12+**
-- **Conda environment** with LeRobot installed from source (see [LeRobot installation](https://github.com/huggingface/lerobot))
 - **GPU** recommended for training (AMD MI300X, NVIDIA A100/H100, etc.)
 - **Display server** (X11/Wayland) required for the MuJoCo viewer during teleoperation and visual evaluation. Headless evaluation works without a display via EGL.
 
 ### Software Dependencies
+
+All dependencies are listed in `requirements.txt` and installed automatically during setup:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
@@ -102,22 +103,29 @@ No files inside the `lerobot/` repository are modified. Everything is standalone
 ## Installation
 
 ```bash
-# 1. Activate your LeRobot conda environment
-conda activate act
+# 1. Create and activate a conda environment
+conda create -n bi_so101 python=3.12 -y
+conda activate bi_so101
 
-# 2. Install MuJoCo (if not already installed)
-pip install mujoco
+# 2. Install PyTorch (adjust for your GPU platform)
+# For NVIDIA:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# For AMD ROCm:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2
 
-# 3. Clone the official SO-ARM100 repo (if assets/so101/ is empty)
+# 3. Install all project dependencies (includes LeRobot, MuJoCo, etc.)
+pip install -r requirements.txt
+
+# 4. Clone the official SO-ARM100 repo (if assets/so101/ is empty)
 git clone https://github.com/TheRobotStudio/SO-ARM100.git /tmp/SO-ARM100
-cp /tmp/SO-ARM100/Simulation/SO101/*.stl bi_so101_sim/assets/so101/
-cp /tmp/SO-ARM100/Simulation/SO101/*.xml bi_so101_sim/assets/so101/
+cp /tmp/SO-ARM100/Simulation/SO101/*.stl assets/so101/
+cp /tmp/SO-ARM100/Simulation/SO101/*.xml assets/so101/
 
-# 4. Verify the scene loads
+# 5. Verify the scene loads
 python -c "
 import os; os.environ['MUJOCO_GL']='egl'
 import mujoco
-m = mujoco.MjModel.from_xml_path('bi_so101_sim/assets/scene_bi_so101_donut.xml')
+m = mujoco.MjModel.from_xml_path('assets/scene_bi_so101_donut.xml')
 print(f'Scene loaded: {m.njnt} joints, {m.nu} actuators, {m.ngeom} geoms')
 "
 # Expected output: Scene loaded: 13 joints, 12 actuators, 76 geoms
