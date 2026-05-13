@@ -107,11 +107,11 @@ All dependencies are listed in `requirements.txt` and installed automatically du
 conda create -n bi_so101 python=3.12 -y
 conda activate bi_so101
 
-# 2. Install PyTorch (adjust for your GPU platform)
-# For NVIDIA:
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-# For AMD ROCm:
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2
+# 2. Install PyTorch (see https://pytorch.org/get-started/locally/ for your platform)
+# For AMD ROCm (replace <rocm_version> with your version, e.g. rocm6.3, rocm7.1):
+pip install torch torchvision --index-url https://download.pytorch.org/whl/<rocm_version>
+# For NVIDIA CUDA (replace <cuda_version> with your version, e.g. cu121, cu124):
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/<cuda_version>
 
 # 3. Install all project dependencies (includes LeRobot, MuJoCo, etc.)
 pip install -r requirements.txt
