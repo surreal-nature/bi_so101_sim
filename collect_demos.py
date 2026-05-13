@@ -148,6 +148,18 @@ class TeleopCollector:
                 "names": ["height", "width", "channels"],
                 "info": video_info,
             },
+            "observation.images.left_wrist_camera": {
+                "dtype": "video",
+                "shape": [480, 640, 3],
+                "names": ["height", "width", "channels"],
+                "info": video_info,
+            },
+            "observation.images.right_wrist_camera": {
+                "dtype": "video",
+                "shape": [480, 640, 3],
+                "names": ["height", "width", "channels"],
+                "info": video_info,
+            },
             "action": {
                 "dtype": "float32",
                 "shape": [12],
@@ -211,6 +223,8 @@ class TeleopCollector:
                     "observation.state": current_pos.copy(),
                     "observation.images.top_camera": obs["pixels/top_camera"],
                     "observation.images.front_camera": obs["pixels/front_camera"],
+                    "observation.images.left_wrist_camera": obs["pixels/left_wrist_camera"],
+                    "observation.images.right_wrist_camera": obs["pixels/right_wrist_camera"],
                     "action": action.copy(),
                     "task": self.task_description,
                 }

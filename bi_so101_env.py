@@ -91,6 +91,12 @@ class BiSO101Env(gym.Env):
                 "pixels/front_camera": gym.spaces.Box(
                     0, 255, shape=(img_height, img_width, 3), dtype=np.uint8
                 ),
+                "pixels/left_wrist_camera": gym.spaces.Box(
+                    0, 255, shape=(img_height, img_width, 3), dtype=np.uint8
+                ),
+                "pixels/right_wrist_camera": gym.spaces.Box(
+                    0, 255, shape=(img_height, img_width, 3), dtype=np.uint8
+                ),
                 "agent_pos": gym.spaces.Box(-np.inf, np.inf, shape=(N_JOINTS,), dtype=np.float32),
             }
         )
@@ -113,6 +119,8 @@ class BiSO101Env(gym.Env):
         return {
             "pixels/top_camera": self._render_camera("top_camera"),
             "pixels/front_camera": self._render_camera("front_camera"),
+            "pixels/left_wrist_camera": self._render_camera("left_wrist_camera"),
+            "pixels/right_wrist_camera": self._render_camera("right_wrist_camera"),
             "agent_pos": self._get_joint_positions(),
         }
 

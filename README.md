@@ -171,6 +171,8 @@ The scene places two SO-101 arms on opposite sides of a table, facing each other
 | **Box** | Open-top container (10cm x 10cm x 6cm), 4 walls + bottom | (-0.12, 0, 0.42) |
 | **Top camera** | Bird's-eye view, 480x640 (observation) | (0, -0.1, 1.2) |
 | **Front camera** | Angled front view, 480x640 (observation) | (0, -0.6, 0.7) |
+| **Left wrist camera** | Mounted on left gripper, 480x640 (observation) | Moves with arm |
+| **Right wrist camera** | Mounted on right gripper, 480x640 (observation) | Moves with arm |
 
 The donut uses a `freejoint` so it can be pushed, picked up, and dropped by the arms. Both arms have additional **fingertip collision boxes** added to the gripper for reliable grasping (the original SO-101 mesh-only collision was too coarse for small object manipulation).
 
@@ -197,6 +199,8 @@ The `BiSO101Env` class wraps the MuJoCo scene as a standard [Gymnasium](https://
 |-----|-------|------|-------------|
 | `pixels/top_camera` | (480, 640, 3) | uint8 | RGB image from the bird's-eye camera |
 | `pixels/front_camera` | (480, 640, 3) | uint8 | RGB image from the angled front camera |
+| `pixels/left_wrist_camera` | (480, 640, 3) | uint8 | RGB image from the left gripper camera |
+| `pixels/right_wrist_camera` | (480, 640, 3) | uint8 | RGB image from the right gripper camera |
 | `agent_pos` | (12,) | float32 | Current joint positions of both arms |
 
 The `agent_pos` vector contains 12 joint angles in the following order:
@@ -294,11 +298,13 @@ Each control step at 30fps records one frame containing:
 
 ```python
 {
-    "observation.state":              # (12,) float32 - current joint angles
-    "observation.images.top_camera":  # (480, 640, 3) uint8 - bird's-eye camera
-    "observation.images.front_camera":# (480, 640, 3) uint8 - angled front camera
-    "action":                         # (12,) float32 - commanded joint targets
-    "task":                           # str - task description
+    "observation.state":                      # (12,) float32 - current joint angles
+    "observation.images.top_camera":          # (480, 640, 3) uint8 - bird's-eye camera
+    "observation.images.front_camera":        # (480, 640, 3) uint8 - angled front camera
+    "observation.images.left_wrist_camera":   # (480, 640, 3) uint8 - left gripper camera
+    "observation.images.right_wrist_camera":  # (480, 640, 3) uint8 - right gripper camera
+    "action":                                 # (12,) float32 - commanded joint targets
+    "task":                                   # str - task description
 }
 ```
 
@@ -361,14 +367,18 @@ The deployment script converts raw environment observations to the format expect
 
 ```python
 # Environment provides:
-obs["agent_pos"]           # (12,) float32 numpy array
-obs["pixels/top_camera"]   # (480, 640, 3) uint8 numpy array
-obs["pixels/front_camera"] # (480, 640, 3) uint8 numpy array
+obs["agent_pos"]                  # (12,) float32 numpy array
+obs["pixels/top_camera"]          # (480, 640, 3) uint8 numpy array
+obs["pixels/front_camera"]        # (480, 640, 3) uint8 numpy array
+obs["pixels/left_wrist_camera"]   # (480, 640, 3) uint8 numpy array
+obs["pixels/right_wrist_camera"]  # (480, 640, 3) uint8 numpy array
 
 # Policy expects:
-batch["observation.state"]                # (1, 12) float32 tensor
-batch["observation.images.top_camera"]    # (1, 3, 480, 640) float32 tensor in [0, 1]
-batch["observation.images.front_camera"]  # (1, 3, 480, 640) float32 tensor in [0, 1]
+batch["observation.state"]                       # (1, 12) float32 tensor
+batch["observation.images.top_camera"]           # (1, 3, 480, 640) float32 tensor in [0, 1]
+batch["observation.images.front_camera"]         # (1, 3, 480, 640) float32 tensor in [0, 1]
+batch["observation.images.left_wrist_camera"]    # (1, 3, 480, 640) float32 tensor in [0, 1]
+batch["observation.images.right_wrist_camera"]   # (1, 3, 480, 640) float32 tensor in [0, 1]
 ```
 
 Each image is permuted from HWC to CHW format and normalized from [0, 255] to [0.0, 1.0].
@@ -572,13 +582,19 @@ Additional physics settings:
 
 #### Observations
 
-The environment provides three observation modalities:
+The environment provides five observation modalities:
 
 1. **Top camera** (`pixels/top_camera`): A 480x640 RGB image from a bird's-eye camera positioned at (0, -0.1, 1.2) looking straight down. This provides a global view of the workspace, both arms, the donut, and the box. Encoded as AV1 video in the dataset.
 
 2. **Front camera** (`pixels/front_camera`): A 480x640 RGB image from an angled front camera positioned at (0, -0.6, 0.7). This provides depth and side-profile information that the top-down view misses — critical for judging gripper-to-donut approach angles and detecting occlusions when one arm crosses over the other. Encoded as AV1 video in the dataset.
 
-3. **Proprioceptive observation** (`agent_pos`): A 12-dimensional vector of current joint angles (radians) for all joints on both arms. This gives the policy direct knowledge of the arm configurations without having to infer them from the images.
+3. **Left wrist camera** (`pixels/left_wrist_camera`): A 480x640 RGB image from a camera mounted on the left gripper body. Moves with the arm and provides an ego-centric close-up view of the left gripper's workspace — essential for precise grasping and fine manipulation.
+
+4. **Right wrist camera** (`pixels/right_wrist_camera`): A 480x640 RGB image from a camera mounted on the right gripper body. Same ego-centric close-up for the right arm.
+
+5. **Proprioceptive observation** (`agent_pos`): A 12-dimensional vector of current joint angles (radians) for all joints on both arms. This gives the policy direct knowledge of the arm configurations without having to infer them from the images.
+
+The 2 fixed + 2 wrist camera setup follows the ALOHA convention for bimanual manipulation. The fixed cameras provide global context while the wrist cameras provide the close-up detail needed for precise grasping.
 
 #### Actions
 
@@ -603,8 +619,12 @@ data/local/bi_so101_donut_packing/
     └── chunk-000/
         ├── observation.images.top_camera/
         │   └── episode_*.mp4   # Bird's-eye view video (AV1)
-        └── observation.images.front_camera/
-            └── episode_*.mp4   # Front view video (AV1)
+        ├── observation.images.front_camera/
+        │   └── episode_*.mp4   # Front view video (AV1)
+        ├── observation.images.left_wrist_camera/
+        │   └── episode_*.mp4   # Left gripper view video (AV1)
+        └── observation.images.right_wrist_camera/
+            └── episode_*.mp4   # Right gripper view video (AV1)
 ```
 
 Feature specification:
@@ -631,6 +651,14 @@ Feature specification:
         "dtype": "video",
         "shape": [480, 640, 3]
     },
+    "observation.images.left_wrist_camera": {
+        "dtype": "video",
+        "shape": [480, 640, 3]
+    },
+    "observation.images.right_wrist_camera": {
+        "dtype": "video",
+        "shape": [480, 640, 3]
+    },
     "action": {
         "dtype": "float32",
         "shape": [12],
@@ -653,10 +681,12 @@ Architecture:
   Action head:      Linear(512 -> 12)  # 12-DOF output
 
 Input processing:
-  Top image:   (3, 480, 640) -> ResNet-18 -> (512,) features
-  Front image: (3, 480, 640) -> ResNet-18 -> (512,) features
-  State:       (12,) -> Linear(12, 512) -> (512,) features
-  Combined:    All image + state tokens processed by transformer encoder
+  Top image:         (3, 480, 640) -> ResNet-18 -> (512,) features
+  Front image:       (3, 480, 640) -> ResNet-18 -> (512,) features
+  Left wrist image:  (3, 480, 640) -> ResNet-18 -> (512,) features
+  Right wrist image: (3, 480, 640) -> ResNet-18 -> (512,) features
+  State:             (12,) -> Linear(12, 512) -> (512,) features
+  Combined:          All image + state tokens processed by transformer encoder
 
 Output:
   Action chunk: (chunk_size, 12) = (50, 12)
@@ -666,7 +696,7 @@ Output:
 
 ACT handles arbitrary action dimensions because the action head is dynamically sized: `nn.Linear(config.dim_model, config.action_feature.shape[0])`. The 12-DOF bimanual configuration works without any code changes to the ACT policy implementation.
 
-ACT also natively supports multiple image inputs. Each image feature listed in `config.image_features` is passed through the vision backbone independently, producing a set of visual tokens that are concatenated with the state token and fed to the transformer. Adding a second camera doubles the visual context without any architectural changes.
+ACT also natively supports multiple image inputs. Each image feature listed in `config.image_features` is passed through the vision backbone independently, producing a set of visual tokens that are concatenated with the state token and fed to the transformer. Adding more cameras simply adds more visual tokens without any architectural changes. The 4-camera setup (2 fixed + 2 wrist) follows the same pattern used by ALOHA for bimanual manipulation.
 
 ---
 
@@ -692,7 +722,7 @@ The joint naming convention already matches: `left_shoulder_pan.pos`, `right_gri
 
 ### 2. Camera Alignment
 
-Mount two physical cameras to match the simulated viewpoints:
+Mount four physical cameras to match the simulated viewpoints:
 
 **Top camera:**
 - Position: directly above the workspace, ~80cm height
@@ -702,6 +732,15 @@ Mount two physical cameras to match the simulated viewpoints:
 **Front camera:**
 - Position: in front of the workspace, ~30cm height, ~60cm away
 - Orientation: angled upward toward the table
+- Resolution: 480x640
+
+**Left wrist camera:**
+- Mount on the left gripper body, facing forward along the gripper axis
+- Should provide a close-up view of whatever the left hand is approaching/grasping
+- Resolution: 480x640
+
+**Right wrist camera:**
+- Mount on the right gripper body, same relative placement as left
 - Resolution: 480x640
 
 ### 3. Domain Adaptation Options
@@ -778,6 +817,8 @@ print(f"State shape: {sample['observation.state'].shape}")
 print(f"Action shape: {sample['action'].shape}")
 print(f"Top camera shape: {sample['observation.images.top_camera'].shape}")
 print(f"Front camera shape: {sample['observation.images.front_camera'].shape}")
+print(f"Left wrist camera shape: {sample['observation.images.left_wrist_camera'].shape}")
+print(f"Right wrist camera shape: {sample['observation.images.right_wrist_camera'].shape}")
 ```
 
 ### Training loss not decreasing

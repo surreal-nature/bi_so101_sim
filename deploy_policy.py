@@ -34,10 +34,14 @@ def obs_to_batch(obs: dict, device: str = "cuda") -> dict:
     state = torch.from_numpy(obs["agent_pos"]).unsqueeze(0).to(device)
     top = torch.from_numpy(obs["pixels/top_camera"]).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     front = torch.from_numpy(obs["pixels/front_camera"]).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+    left_wrist = torch.from_numpy(obs["pixels/left_wrist_camera"]).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+    right_wrist = torch.from_numpy(obs["pixels/right_wrist_camera"]).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     return {
         "observation.state": state.to(device),
         "observation.images.top_camera": top.to(device),
         "observation.images.front_camera": front.to(device),
+        "observation.images.left_wrist_camera": left_wrist.to(device),
+        "observation.images.right_wrist_camera": right_wrist.to(device),
     }
 
 
