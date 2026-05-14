@@ -82,9 +82,29 @@ No files inside the `lerobot/` repository are modified. All project code is in t
 
 ## Prerequisites
 
+- **Conda** (Miniconda or Miniforge) -- see installation below if not already installed
 - **Python 3.12+**
 - **GPU** recommended for training (AMD MI300X, NVIDIA A100/H100, etc.)
 - **Display server** (X11/Wayland) required for the MuJoCo viewer during teleoperation and visual evaluation. Headless evaluation works without a display via EGL.
+
+### Installing Conda
+
+If conda is not already available on your system, install Miniforge (recommended) or Miniconda:
+
+```bash
+# Miniforge (includes conda + mamba, community-maintained, conda-forge default channel)
+curl -L -O https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+bash Miniforge3-Linux-x86_64.sh -b -p $HOME/miniforge3
+$HOME/miniforge3/bin/conda init
+
+# Alternatively, Miniconda (Anaconda-maintained)
+# curl -L -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+# bash Miniconda3-latest-Linux-x86_64.sh -b -p $HOME/miniconda3
+# $HOME/miniconda3/bin/conda init
+
+# Restart your shell or source the profile
+source ~/.bashrc
+```
 
 ### Software Dependencies
 
@@ -107,21 +127,24 @@ All dependencies are listed in `requirements.txt` and installed automatically du
 conda create -n bi_so101 python=3.12 -y
 conda activate bi_so101
 
-# 2. Install PyTorch (see https://pytorch.org/get-started/locally/ for your platform)
+# 2. Install pip inside the conda environment
+conda install -n bi_so101 pip
+
+# 3. Install PyTorch (see https://pytorch.org/get-started/locally/ for your platform)
 # For AMD ROCm (replace <rocm_version> with your version, e.g. rocm6.3, rocm7.1):
 pip install torch torchvision --index-url https://download.pytorch.org/whl/<rocm_version>
 # For NVIDIA CUDA (replace <cuda_version> with your version, e.g. cu121, cu124):
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/<cuda_version>
 
-# 3. Install all project dependencies (includes LeRobot, MuJoCo, etc.)
+# 4. Install all project dependencies (includes LeRobot, MuJoCo, etc.)
 pip install -r requirements.txt
 
-# 4. Clone the official SO-ARM100 repo (if assets/so101/ is empty)
+# 5. Clone the official SO-ARM100 repo (if assets/so101/ is empty)
 git clone https://github.com/TheRobotStudio/SO-ARM100.git /tmp/SO-ARM100
-cp /tmp/SO-ARM100/Simulation/SO101/*.stl assets/so101/
+cp /tmp/SO-ARM100/Simulation/SO101/assets/*.stl assets/so101/
 cp /tmp/SO-ARM100/Simulation/SO101/*.xml assets/so101/
 
-# 5. Verify the scene loads
+# 6. Verify the scene loads
 python -c "
 import os; os.environ['MUJOCO_GL']='egl'
 import mujoco
