@@ -54,7 +54,7 @@ RIGHT_KEYS = {
     "p": (10, +1), # right_wrist_roll +
 }
 
-STEP_SIZE = 0.05
+STEP_SIZE = 0.1
 
 
 class TeleopCollector:
@@ -108,6 +108,8 @@ class TeleopCollector:
             elif key in RIGHT_KEYS:
                 idx, sign = RIGHT_KEYS[key]
                 delta[idx] += sign * STEP_SIZE
+
+        self._pressed_keys.clear()
 
         target = current_pos + delta
 
@@ -293,7 +295,8 @@ def main():
     parser.add_argument("--task", default="Pick up the donut and place it in the box.",
                         help="Task description string")
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--max-steps", type=int, default=300)
+    parser.add_argument("--max-steps", type=int, default=0,
+                        help="Max steps per episode (0 = no timeout, use X/Z to end)")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite existing dataset directory if it exists")
     args = parser.parse_args()
@@ -311,7 +314,8 @@ def main():
             print("Use --force to overwrite, or --dataset-name to use a different name.")
             sys.exit(1)
 
-    env = BiSO101Env(fps=args.fps, max_episode_steps=args.max_steps)
+    max_steps = args.max_steps if args.max_steps > 0 else 10**9
+    env = BiSO101Env(fps=args.fps, max_episode_steps=max_steps)
     collector = TeleopCollector(env, args.dataset_name, args.dataset_root, args.task)
     collector.run()
 
