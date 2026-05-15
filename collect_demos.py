@@ -289,10 +289,22 @@ def main():
                         help="Task description string")
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--max-steps", type=int, default=300)
+    parser.add_argument("--force", action="store_true",
+                        help="Overwrite existing dataset directory if it exists")
     args = parser.parse_args()
 
     if args.dataset_root is None:
         args.dataset_root = os.path.join(os.path.dirname(__file__), "data", args.dataset_name)
+
+    if os.path.exists(args.dataset_root):
+        if args.force:
+            import shutil
+            print(f"Removing existing dataset: {args.dataset_root}")
+            shutil.rmtree(args.dataset_root)
+        else:
+            print(f"Error: Dataset already exists at {args.dataset_root}")
+            print("Use --force to overwrite, or --dataset-name to use a different name.")
+            sys.exit(1)
 
     env = BiSO101Env(fps=args.fps, max_episode_steps=args.max_steps)
     collector = TeleopCollector(env, args.dataset_name, args.dataset_root, args.task)
