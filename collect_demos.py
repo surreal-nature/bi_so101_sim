@@ -65,7 +65,7 @@ class TeleopCollector:
         self.dataset_root = dataset_root
         self.task_description = task_description
 
-        self._action = np.zeros(12, dtype=np.float32)
+        self._target_pos = np.zeros(12, dtype=np.float32)
         self._left_gripper_open = True
         self._right_gripper_open = True
         self._pressed_keys: set[str] = set()
@@ -97,27 +97,22 @@ class TeleopCollector:
         elif action_type == 0:  # release
             self._pressed_keys.discard(key_char)
 
-    def _compute_action(self, current_pos: np.ndarray) -> np.ndarray:
-        delta = np.zeros(12, dtype=np.float32)
-
+    def _compute_action(self) -> np.ndarray:
         for key in self._pressed_keys:
             if key in LEFT_KEYS:
                 idx, sign = LEFT_KEYS[key]
-                delta[idx] += sign * STEP_SIZE
+                self._target_pos[idx] += sign * STEP_SIZE
             elif key in RIGHT_KEYS:
                 idx, sign = RIGHT_KEYS[key]
-                delta[idx] += sign * STEP_SIZE
+                self._target_pos[idx] += sign * STEP_SIZE
 
         self._pressed_keys.clear()
 
-        target = current_pos + delta
+        self._target_pos[5] = 0.0 if self._left_gripper_open else 1.5
+        self._target_pos[11] = 0.0 if self._right_gripper_open else 1.5
 
-        # Gripper targets
-        target[5] = 0.0 if self._left_gripper_open else 1.5
-        target[11] = 0.0 if self._right_gripper_open else 1.5
-
-        target = np.clip(target, self.env.action_space.low, self.env.action_space.high)
-        return target
+        self._target_pos = np.clip(self._target_pos, self.env.action_space.low, self.env.action_space.high)
+        return self._target_pos.copy()
 
     def _create_dataset(self):
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -206,6 +201,7 @@ class TeleopCollector:
 
         obs, _ = self.env.reset(seed=42)
         current_pos = obs["agent_pos"].copy()
+        self._target_pos = current_pos.copy()
 
         def key_callback(keycode):
             self._key_callback(keycode, 1)
@@ -224,6 +220,7 @@ class TeleopCollector:
                     self._episode_frames = []
                     obs, _ = self.env.reset()
                     current_pos = obs["agent_pos"].copy()
+                    self._target_pos = current_pos.copy()
                     self._left_gripper_open = True
                     self._right_gripper_open = True
                     self._should_discard = False
@@ -235,6 +232,7 @@ class TeleopCollector:
                     self._save_episode_to_dataset(dataset)
                     obs, _ = self.env.reset()
                     current_pos = obs["agent_pos"].copy()
+                    self._target_pos = current_pos.copy()
                     self._left_gripper_open = True
                     self._right_gripper_open = True
                     self._should_save = False
@@ -243,7 +241,7 @@ class TeleopCollector:
                     frame_count = 0
 
                 if not self._episode_ended:
-                    action = self._compute_action(current_pos)
+                    action = self._compute_action()
 
                     frame = {
                         "observation.state": current_pos.copy(),
