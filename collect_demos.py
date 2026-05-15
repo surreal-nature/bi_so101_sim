@@ -18,7 +18,7 @@ import os
 import sys
 import time
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+os.environ.setdefault("MUJOCO_GL", "glfw")
 
 import mujoco
 import mujoco.viewer
@@ -52,6 +52,7 @@ RIGHT_KEYS = {
     "y": (9, +1),  # right_wrist_flex +
     "h": (9, -1),  # right_wrist_flex -
     "p": (10, +1), # right_wrist_roll +
+    ";": (10, -1), # right_wrist_roll -
 }
 
 STEP_SIZE = 0.1
@@ -86,8 +87,6 @@ class TeleopCollector:
                 self._left_gripper_open = not self._left_gripper_open
             elif keycode == 257:  # Enter - toggle right gripper
                 self._right_gripper_open = not self._right_gripper_open
-            elif key_char == ";":
-                self._action[10] -= STEP_SIZE  # right_wrist_roll -
             elif key_char == "z":
                 self._should_discard = True
             elif key_char == "x":
