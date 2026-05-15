@@ -76,7 +76,9 @@ class BiSO101Env(gym.Env):
         )
         self._donut_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "donut")
         self._donut_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "donut_joint")
+        self._box_joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "box_joint")
         self._box_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "box_center")
+        self._box_grasp_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "box_grasp_site")
         self._donut_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "donut_site")
 
         ctrl_low = np.array([self.model.actuator_ctrlrange[i, 0] for i in self._actuator_ids], dtype=np.float32)
@@ -104,6 +106,7 @@ class BiSO101Env(gym.Env):
         self._renderer = None
         self._step_count = 0
         self._donut_qpos_addr = self.model.jnt_qposadr[self._donut_joint_id]
+        self._box_qpos_addr = self.model.jnt_qposadr[self._box_joint_id]
 
     def _get_joint_positions(self) -> np.ndarray:
         return np.array(
@@ -149,6 +152,13 @@ class BiSO101Env(gym.Env):
         self.data.qpos[addr + 2] = 0.44
         self.data.qpos[addr + 3] = 1.0
         self.data.qpos[addr + 4:addr + 7] = 0.0
+
+        box_addr = self._box_qpos_addr
+        self.data.qpos[box_addr] = -0.08
+        self.data.qpos[box_addr + 1] = 0.0
+        self.data.qpos[box_addr + 2] = 0.42
+        self.data.qpos[box_addr + 3] = 1.0
+        self.data.qpos[box_addr + 4:box_addr + 7] = 0.0
 
         mujoco.mj_forward(self.model, self.data)
         self._step_count = 0

@@ -76,6 +76,7 @@
 
     <!-- Box (open-top container on the left side) -->
     <body name="box" pos="-0.08 0.0 0.42">
+      <freejoint name="box_joint"/>
       <geom name="box_bottom" type="box" size="0.05 0.05 0.005" pos="0 0 0" material="box_material" mass="0.2"
             contype="1" conaffinity="1"/>
       <geom name="box_wall1" type="box" size="0.05 0.005 0.03" pos="0 0.045 0.03" material="box_material"
@@ -87,6 +88,7 @@
       <geom name="box_wall4" type="box" size="0.005 0.05 0.03" pos="-0.045 0 0.03" material="box_material"
             contype="1" conaffinity="1"/>
       <site name="box_center" size="0.005" pos="0 0 0.02" rgba="0 1 0 0.5"/>
+      <site name="box_grasp_site" size="0.005" pos="0 0 0.01" rgba="0 0 1 0.5"/>
     </body>
 
     <!-- ==================== LEFT ARM ==================== -->

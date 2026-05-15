@@ -15,6 +15,7 @@ This project is designed to produce a trained ACT (Action Chunking with Transfor
 - [Architecture Overview](#architecture-overview)
   - [MuJoCo Scene](#mujoco-scene)
   - [Gymnasium Environment](#gymnasium-environment)
+  - [Automated Demo Collection (IK + Motion Planning)](#automated-demo-collection-ik--motion-planning)
   - [Keyboard Teleoperation Collector](#keyboard-teleoperation-collector)
   - [Training Pipeline](#training-pipeline)
   - [Policy Deployment](#policy-deployment)
@@ -67,6 +68,7 @@ bi_so101_sim/
 │       └── *.part                     #   CAD source files
 ├── bi_so101_env.py                    # Gymnasium environment wrapper
 ├── collect_demos.py                   # Keyboard teleoperation + LeRobot dataset recorder
+├── auto_collect_demos.py              # Automated IK-based demo collection (no keyboard needed)
 ├── deploy_policy.py                   # Policy deployment (viewer + headless evaluation)
 ├── train.sh                           # lerobot-train wrapper script (SLURM-compatible)
 ├── data/                              # (created at runtime) Recorded datasets
@@ -151,7 +153,7 @@ import mujoco
 m = mujoco.MjModel.from_xml_path('assets/scene_bi_so101_donut.xml')
 print(f'Scene loaded: {m.njnt} joints, {m.nu} actuators, {m.ngeom} geoms')
 "
-# Expected output: Scene loaded: 13 joints, 12 actuators, 76 geoms
+# Expected output: Scene loaded: 14 joints, 12 actuators, 76 geoms
 ```
 
 ---
@@ -172,32 +174,32 @@ The scene places two SO-101 arms on opposite sides of a table, facing each other
          |
    +-----+-----+
    |             |        Table: 0.6m x 0.5m x 0.04m (at z=0.40m)
-   |    [BOX]   |        Box:   0.1m x 0.1m x 0.06m (at x=-0.12, z=0.42)
-   |             |        Donut: r=2.5cm, h=2.4cm   (at x=+0.08, z=0.44)
-   |      (donut)|
+   |   [BOX]    |        Box:   0.1m x 0.1m x 0.06m (at x=-0.08, z=0.42)
+   |             |        Donut: r=2.5cm, h=2.4cm   (at x=+0.05, z=0.44)
+   |     (donut) |
    |             |
    +-----+-----+----> X
   LEFT          RIGHT
   ARM           ARM
   (blue)        (orange)
-  x=-0.22       x=+0.22
+  x=-0.20       x=+0.20
 ```
 
 #### Scene Components
 
 | Component | Description | Position (m) |
 |-----------|-------------|-------------|
-| **Left arm** | SO-101, blue material, faces right (+X) | (-0.22, 0, 0.42) |
-| **Right arm** | SO-101, orange material, faces left (-X) | (+0.22, 0, 0.42) |
+| **Left arm** | SO-101, blue material, faces right (+X) | (-0.20, 0, 0.42) |
+| **Right arm** | SO-101, orange material, faces left (-X) | (+0.20, 0, 0.42) |
 | **Table** | Wooden surface with 4 legs | (0, 0, 0.40) |
-| **Donut** | Cylinder (r=2.5cm, h=2.4cm), 50g, freejoint | (+0.08, 0, 0.44) |
-| **Box** | Open-top container (10cm x 10cm x 6cm), 4 walls + bottom | (-0.12, 0, 0.42) |
+| **Donut** | Cylinder (r=2.5cm, h=2.4cm), 50g, freejoint | (+0.05, 0, 0.44) |
+| **Box** | Open-top container (10cm x 10cm x 6cm), freejoint, 4 walls + bottom | (-0.08, 0, 0.42) |
 | **Top camera** | Bird's-eye view, 480x640 (observation) | (0, -0.1, 1.2) |
 | **Front camera** | Angled front view, 480x640 (observation) | (0, -0.6, 0.7) |
 | **Left wrist camera** | Mounted on left gripper, 480x640 (observation) | Moves with arm |
 | **Right wrist camera** | Mounted on right gripper, 480x640 (observation) | Moves with arm |
 
-The donut uses a `freejoint` so it can be pushed, picked up, and dropped by the arms. Both arms have additional **fingertip collision boxes** added to the gripper for reliable grasping (the original SO-101 mesh-only collision was too coarse for small object manipulation).
+Both the donut and box use `freejoint` elements so they can be pushed, picked up, lifted, and dropped by the arms. Both arms have additional **fingertip collision boxes** added to the gripper for reliable grasping (the original SO-101 mesh-only collision was too coarse for small object manipulation). The box also has a `box_grasp_site` used by the IK solver as a target for the left arm's grasp approach.
 
 #### Arm Orientations
 
@@ -276,6 +278,94 @@ This randomization encourages the policy to generalize across different initial 
 - **Reward:** Sparse binary. `1.0` if the donut center is within `success_threshold` (3cm) of the box center, `0.0` otherwise.
 - **Terminated:** `True` when success is achieved.
 - **Truncated:** `True` when `max_episode_steps` is reached without success.
+
+---
+
+### Automated Demo Collection (IK + Motion Planning)
+
+**File:** `auto_collect_demos.py`
+
+An automated demonstration generator that uses **Jacobian-based inverse kinematics** and **waypoint interpolation** to produce high-quality bimanual manipulation demonstrations without any human input. This is the recommended method for generating large training datasets.
+
+#### Why Automated Collection?
+
+Keyboard teleoperation of 12 joints across two arms is extremely difficult — coordinating bimanual motions with keyboard keys produces jerky, inconsistent demonstrations. The automated collector solves this by:
+
+1. **Computing IK solutions** for target end-effector positions using damped least-squares on the arm's Jacobian
+2. **Interpolating** between waypoints in joint space for smooth, natural trajectories
+3. **Adding controlled noise** for trajectory diversity across episodes
+4. **Batch-generating** dozens or hundreds of episodes unattended
+
+#### Inverse Kinematics Solver
+
+The `JacobianIKSolver` class computes joint angles that place the gripper at a desired Cartesian position:
+
+```
+Algorithm: Damped Least-Squares (DLS) IK
+  Input:  target position (x, y, z), initial joint angles
+  Output: 5 joint angles (shoulder_pan, shoulder_lift, elbow_flex, wrist_flex, wrist_roll)
+
+  For each iteration (up to 100):
+    1. Compute positional Jacobian J (3×5) via mj_jacSite
+    2. Compute position error: e = target - current_site_pos
+    3. If ||e|| < 1mm: converged, return joints
+    4. Solve: dq = J^T (J J^T + λ²I)^{-1} e    (λ = 0.05 damping factor)
+    5. Update: q ← clamp(q + dq, joint_limits)
+    6. Forward kinematics to update site positions
+```
+
+The solver operates on each arm independently (5 DOF excluding the gripper), using the `left_gripperframe` and `right_gripperframe` sites as end-effector targets. The gripper joint is controlled separately (open = 0.0 rad, closed = 1.5 rad).
+
+#### 16-Phase Task Sequence
+
+The automated collector executes a coordinated bimanual task in 16 phases:
+
+```
+Phase  Description                        Active Arm   Gripper Action    ~Steps
+─────  ─────────────────────────────────   ──────────   ──────────────    ──────
+  1    Left arm → pre-grasp above box      Left         -                  60
+  2    Left arm → grasp box (descend)      Left         -                  30
+  3    Left arm close gripper              Left         Close (1.5)        15
+  4    Left arm lifts box into air         Left         Hold closed        40
+  5    Right arm → pre-grasp above donut   Right        -                  60
+  6    Right arm → grasp donut (descend)   Right        -                  30
+  7    Right arm close gripper             Right        Close (1.5)        15
+  8    Right arm lifts donut               Right        Hold closed        30
+  9    Right arm → above held box          Right        Hold closed        50
+ 10    Right arm → place donut in box      Right        Hold closed        30
+ 11    Right arm open gripper (release)    Right        Open (0.0)         15
+ 12    Right arm retreat upward            Right        -                  30
+ 13    Right arm → home position           Right        Open               40
+ 14    Left arm → table (lower box)        Left         Hold closed        40
+ 15    Left arm open gripper (release)     Left         Open (0.0)         15
+ 16    Left arm → home position            Left         Open               40
+
+Total: ~540 frames per episode (~18 seconds at 30 FPS)
+```
+
+Each phase uses IK to solve for the target joint configuration, then linearly interpolates from the current joint positions to the target over N steps. This produces smooth, physically-plausible trajectories.
+
+#### Trajectory Diversity
+
+To produce varied training data (essential for policy generalization), the collector adds controlled randomness:
+
+| Source | Method | Default |
+|--------|--------|---------|
+| **Donut position** | Environment's built-in `np_random` randomization | x ∈ [0.0, 0.08], y ∈ [-0.05, 0.05] |
+| **IK targets** | Gaussian noise on Cartesian target positions | σ = 0.005m (5mm) |
+| **Phase timing** | ±10% random variation on interpolation steps per phase | ±10% |
+| **Random seed** | Each episode uses seed = `base_seed + episode_index` | base=0 |
+
+The `--noise-scale` argument controls the IK target noise. Set to 0 for deterministic trajectories.
+
+#### Recording Architecture
+
+The automated collector uses the same **replay-based recording** architecture as the keyboard collector:
+
+1. **Phase 1 (physics only):** Generate the full episode by stepping physics with IK-computed actions. Record joint states and actions per frame. No camera rendering — avoids EGL/GLFW context conflicts.
+2. **Phase 2 (replay + render):** Reset to the episode's initial state, replay all recorded actions, and render all 4 cameras at each frame. Write frames to the LeRobot dataset.
+
+This separation is critical on systems where the EGL off-screen renderer conflicts with the GLFW viewer (e.g., AMD Wayland setups).
 
 ---
 
@@ -451,7 +541,7 @@ r.close()
 
 Expected output:
 ```
-Joints: 13, Actuators: 12, Geoms: 76
+Joints: 14, Actuators: 12, Geoms: 76
 Camera renders: (480, 640, 3), mean pixel: 109.8
 ```
 
@@ -468,10 +558,68 @@ mujoco.viewer.launch(m, d)
 
 ### Step 2: Collect Demonstrations
 
-Run the teleoperation collector. **Requires a display** (X11/Wayland) for the MuJoCo viewer.
+#### Option A: Automated Collection (Recommended)
+
+Generate demonstrations automatically using IK and motion planning. **No display required** — runs fully headless.
 
 ```bash
-python collect_demos.py
+# Generate 50 episodes (default)
+python auto_collect_demos.py --force
+
+# Custom configuration
+python auto_collect_demos.py \
+    --n-episodes 100 \
+    --dataset-name "local/bi_so101_donut_auto" \
+    --noise-scale 0.01 \
+    --seed 42 \
+    --force
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--n-episodes` | 50 | Number of episodes to generate |
+| `--dataset-name` | `local/bi_so101_donut_auto` | LeRobot dataset repo_id |
+| `--dataset-root` | `./data/<dataset-name>` | Local storage path |
+| `--task` | "Pick up the donut and place it in the box." | Task description string |
+| `--noise-scale` | 0.005 | Gaussian noise σ on IK targets (meters). 0 = deterministic |
+| `--fps` | 30 | Control frequency |
+| `--seed` | 0 | Base random seed (episode N uses seed + N) |
+| `--force` | (flag) | Overwrite existing dataset directory |
+
+**Typical output:**
+```
+============================================================
+Automated Demo Collection - Bimanual SO-101 Donut Packing
+============================================================
+Episodes: 50
+Dataset: local/bi_so101_donut_auto
+Noise scale: 0.005
+Task: Pick up the donut and place it in the box.
+============================================================
+
+Episode 1/50 (seed=0)
+  Generated 540 frames in 2.3s
+  Rendering and saving...
+  100/540 frames rendered
+  200/540 frames rendered
+  ...
+  Saved in 45.2s (total: 47.5s)
+
+Episode 2/50 (seed=1)
+  Generated 528 frames in 2.1s
+  ...
+
+Done! Saved 50 episodes to ./data/local/bi_so101_donut_auto
+```
+
+Each episode takes ~2s to generate (physics only) + ~45s to render and save (4 cameras × ~540 frames). A full 50-episode dataset takes approximately 40 minutes.
+
+#### Option B: Keyboard Teleoperation
+
+For manual demonstrations requiring human judgment. **Requires a display** (X11/Wayland) for the MuJoCo viewer.
+
+```bash
+python collect_demos.py --force
 ```
 
 With custom options:
@@ -482,10 +630,10 @@ python collect_demos.py \
     --dataset-root ./data/my_dataset \
     --task "Pick up the donut and place it in the box." \
     --fps 30 \
-    --max-steps 300
+    --force
 ```
 
-#### Tips for Good Demonstrations
+#### Tips for Good Manual Demonstrations
 
 - **Aim for 50+ episodes**. More diverse demonstrations produce more robust policies. 50 episodes at ~10 seconds each takes roughly 15-20 minutes with practice.
 - **Be consistent in strategy.** Use the same general approach each time (e.g., always pick with the right arm, always approach from the same side). ACT learns from the distribution of demonstrations, so consistency reduces multi-modality.
@@ -850,6 +998,20 @@ print(f"Right wrist camera shape: {sample['observation.images.right_wrist_camera
 - **Check for corrupted episodes.** Discard episodes where the task was not completed or the arms behaved erratically.
 - **Reduce learning rate.** The default may be too aggressive for small datasets.
 - **Increase chunk_size.** Longer action chunks can help with temporal coherence in bimanual tasks.
+
+### Auto collector IK fails to converge
+
+If `auto_collect_demos.py` produces episodes where arms don't reach the target positions:
+
+- **Targets out of workspace:** The donut or box may be placed outside the arm's reachable workspace. The SO-101 has ~25cm reach from its base. Check that object positions are within the table area between the two arms.
+- **Increase damping:** If the IK oscillates, increase the damping factor in `JacobianIKSolver` (default 0.05). Higher damping = more stable but slower convergence.
+- **Joint limit saturation:** The solver clamps joints to their limits. If the target requires extreme joint angles, the solver may converge to the closest reachable point. Check which joints are hitting their limits.
+- **Increase max iterations:** The default is 100. For distant targets, try 200.
+
+### Auto collector episodes too short / phases skipped
+
+- Check the `--noise-scale` value. Large noise (> 0.02m) can push IK targets outside the workspace, causing the solver to produce configurations that don't reach the target.
+- Verify the box has a `freejoint` in the scene XML. Without it, the box can't be picked up and the task sequence fails.
 
 ### Donut falls through table / doesn't respond to gripper
 
