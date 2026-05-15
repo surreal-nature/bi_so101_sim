@@ -54,7 +54,7 @@ GRIPPER_CLOSED = -0.175
 class JacobianIKSolver:
     """Damped least-squares IK for a single SO-101 arm (5 DOF, no gripper)."""
 
-    def __init__(self, model, data, site_name, joint_names, damping=0.05):
+    def __init__(self, model, data, site_name, joint_names, damping=0.01):
         self.model = model
         self.data = data
         self.damping = damping
@@ -82,7 +82,7 @@ class JacobianIKSolver:
     def _get_site_pos(self):
         return self.data.site_xpos[self.site_id].copy()
 
-    def solve(self, target_pos, q_init=None, max_iter=100, tol=0.001):
+    def solve(self, target_pos, q_init=None, max_iter=500, tol=0.001):
         original_qpos = self.data.qpos.copy()
         original_qvel = self.data.qvel.copy()
 
@@ -155,8 +155,13 @@ class AutoCollector:
             env.model, mujoco.mjtObj.mjOBJ_JOINT, "box_joint")
         self._donut_joint_id = mujoco.mj_name2id(
             env.model, mujoco.mjtObj.mjOBJ_JOINT, "donut_joint")
+        self._left_gc_site_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_SITE, "left_grasp_center")
+        self._right_gc_site_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_SITE, "right_grasp_center")
         self._attachments = []
         self._saved_contacts = {}
+        self._frozen_joints = {}
 
     def _get_current_action(self):
         return self.env._get_joint_positions().copy()
@@ -168,6 +173,12 @@ class AutoCollector:
             mujoco.mj_step(self.env.model, self.env.data)
             if self._attachments:
                 self._enforce_attachments()
+            for jid, saved in self._frozen_joints.items():
+                addr = self.env.model.jnt_qposadr[jid]
+                self.env.data.qpos[addr:addr + 7] = saved
+                dof_addr = self.env.model.jnt_dofadr[jid]
+                self.env.data.qvel[dof_addr:dof_addr + 6] = 0
+            if self._attachments or self._frozen_joints:
                 mujoco.mj_forward(self.env.model, self.env.data)
         self.env._step_count += 1
 
@@ -204,6 +215,13 @@ class AutoCollector:
             new_action[self._right_gripper_index] = value
         return new_action
 
+    def _freeze_object(self, obj_joint_id):
+        addr = self.env.model.jnt_qposadr[obj_joint_id]
+        self._frozen_joints[obj_joint_id] = self.env.data.qpos[addr:addr + 7].copy()
+
+    def _unfreeze_object(self, obj_joint_id):
+        self._frozen_joints.pop(obj_joint_id, None)
+
     def _disable_body_contacts(self, body_id):
         """Disable collision for all geoms of a body (prevents physics fighting kinematic override)."""
         if body_id in self._saved_contacts:
@@ -235,13 +253,16 @@ class AutoCollector:
 
     def _attach(self, gripper_body_id, obj_body_id, obj_joint_id, keep_upright=False):
         """Record relative pose for kinematic attachment and disable object contacts."""
-        b1_pos = self.env.data.xpos[gripper_body_id].copy()
         b2_pos = self.env.data.xpos[obj_body_id].copy()
 
         if keep_upright:
-            rel_pos = b2_pos - b1_pos
+            site_id = (self._left_gc_site_id if gripper_body_id == self._left_gripper_body_id
+                       else self._right_gc_site_id)
+            ref_pos = self.env.data.site_xpos[site_id].copy()
+            rel_pos = b2_pos - ref_pos
             rel_quat = np.array([1.0, 0.0, 0.0, 0.0])
         else:
+            b1_pos = self.env.data.xpos[gripper_body_id].copy()
             b1_mat = self.env.data.xmat[gripper_body_id].reshape(3, 3)
             b1_quat = np.zeros(4)
             mujoco.mju_mat2Quat(b1_quat, self.env.data.xmat[gripper_body_id])
@@ -265,12 +286,14 @@ class AutoCollector:
     def _enforce_attachments(self):
         """Set attached objects' qpos to maintain relative pose with gripper."""
         for gripper_body_id, obj_body_id, obj_joint_id, rel_pos, rel_quat, keep_upright in self._attachments:
-            b1_pos = self.env.data.xpos[gripper_body_id]
-
             if keep_upright:
-                world_pos = b1_pos + rel_pos
+                site_id = (self._left_gc_site_id if gripper_body_id == self._left_gripper_body_id
+                           else self._right_gc_site_id)
+                ref_pos = self.env.data.site_xpos[site_id]
+                world_pos = ref_pos + rel_pos
                 world_quat = np.array([1.0, 0.0, 0.0, 0.0])
             else:
+                b1_pos = self.env.data.xpos[gripper_body_id]
                 b1_mat = self.env.data.xmat[gripper_body_id].reshape(3, 3)
                 b1_quat = np.zeros(4)
                 mujoco.mju_mat2Quat(b1_quat, self.env.data.xmat[gripper_body_id])
@@ -320,21 +343,29 @@ class AutoCollector:
 
         current_action = self._get_current_action()
 
-        # Phase 1: Left arm → approach box from the side (open gripper)
-        pre_grasp_box = self._add_noise(box_pos + np.array([-0.05, 0, 0]), rng)
+        # Freeze box so arm approach doesn't push it
+        attach_events.append((len(actions_list), "freeze", self._box_joint_id))
+        self._freeze_object(self._box_joint_id)
+
+        # Phase 1: Left arm → approach box from +y direction (open gripper)
+        pre_grasp_box = self._add_noise(box_pos + np.array([0, 0.05, 0]), rng)
         target_action = self._solve_left(pre_grasp_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
         n = self._noisy_steps(60, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 2: Left arm → move to box wall edge
+        # Phase 2: Left arm → move to box front wall rim
         grasp_box = self._add_noise(box_pos, rng)
         target_action = self._solve_left(grasp_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
-        n = self._noisy_steps(30, rng)
+        n = self._noisy_steps(40, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
+
+        # Unfreeze box before grasping
+        attach_events.append((len(actions_list), "unfreeze", self._box_joint_id))
+        self._unfreeze_object(self._box_joint_id)
 
         # Phase 3: Left arm close gripper + attach box
         target_action = self._set_gripper(current_action, "left", GRIPPER_CLOSED)
@@ -348,7 +379,7 @@ class AutoCollector:
                      self._box_joint_id, keep_upright=True)
 
         # Phase 4: Left arm lifts box (only left arm moves)
-        hold_pos = np.array([0.0, 0.0, 0.52])
+        hold_pos = np.array([-0.05, 0.05, 0.50])
         hold_pos = self._add_noise(hold_pos, rng)
         target_action = self._solve_left(hold_pos, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -359,8 +390,21 @@ class AutoCollector:
         # Read actual held box center position from simulation
         box_held_center = self.env.data.site_xpos[self.env._box_site_id].copy()
 
-        # Phase 5: Right arm → approach donut from the right side (only right arm moves)
-        pre_grasp_donut = self._add_noise(donut_pos + np.array([0.05, 0, 0]), rng)
+        # Freeze donut so right arm approach doesn't push it
+        attach_events.append((len(actions_list), "freeze", self._donut_joint_id))
+        self._freeze_object(self._donut_joint_id)
+
+        # Phase 5a: Right arm → intermediate position (avoids servo stalling)
+        intermediate = self._add_noise(np.array([0.10, -0.10, 0.48]), rng)
+        target_action = self._solve_right(intermediate, current_action)
+        target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
+        target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
+        n = self._noisy_steps(60, rng)
+        self._interpolate_and_step(current_action, target_action, n, states, actions_list)
+        current_action = target_action
+
+        # Phase 5b: Right arm → pre-grasp above donut
+        pre_grasp_donut = self._add_noise(donut_pos + np.array([0, 0, 0.03]), rng)
         target_action = self._solve_right(pre_grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -368,7 +412,7 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 6: Right arm → move to donut position
+        # Phase 6: Right arm → descend to donut position
         grasp_donut = self._add_noise(donut_pos, rng)
         target_action = self._solve_right(grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
@@ -376,6 +420,10 @@ class AutoCollector:
         n = self._noisy_steps(30, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
+
+        # Unfreeze donut before grasping
+        attach_events.append((len(actions_list), "unfreeze", self._donut_joint_id))
+        self._unfreeze_object(self._donut_joint_id)
 
         # Phase 7: Right arm close gripper + attach donut
         target_action = self._set_gripper(current_action, "right", GRIPPER_CLOSED)
@@ -523,6 +571,7 @@ class AutoCollector:
         self._restore_all_contacts()
         mujoco.mj_forward(self.env.model, self.env.data)
 
+        self._frozen_joints = {}
         event_idx = 0
 
         for i in range(n_frames):
@@ -531,8 +580,12 @@ class AutoCollector:
                 if ev[1] == "attach":
                     self._attach(ev[2], ev[3], ev[4],
                                  keep_upright=ev[5] if len(ev) > 5 else False)
-                else:
+                elif ev[1] == "detach":
                     self._detach(ev[2])
+                elif ev[1] == "freeze":
+                    self._freeze_object(ev[2])
+                elif ev[1] == "unfreeze":
+                    self._unfreeze_object(ev[2])
                 event_idx += 1
 
             obs = self.env._get_obs()
