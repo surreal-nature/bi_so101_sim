@@ -132,10 +132,10 @@ class AutoCollector:
         self.seed = seed
 
         self.left_ik = JacobianIKSolver(
-            env.model, env.data, "left_gripperframe", LEFT_IK_JOINTS
+            env.model, env.data, "left_grasp_center", LEFT_IK_JOINTS
         )
         self.right_ik = JacobianIKSolver(
-            env.model, env.data, "right_gripperframe", RIGHT_IK_JOINTS
+            env.model, env.data, "right_grasp_center", RIGHT_IK_JOINTS
         )
 
         self._left_joint_indices = list(range(0, 5))
@@ -359,8 +359,8 @@ class AutoCollector:
         # Read actual held box center position from simulation
         box_held_center = self.env.data.site_xpos[self.env._box_site_id].copy()
 
-        # Phase 5: Right arm → pre-grasp above donut (only right arm moves)
-        pre_grasp_donut = self._add_noise(donut_pos + np.array([0, 0, 0.06]), rng)
+        # Phase 5: Right arm → approach donut from the right side (only right arm moves)
+        pre_grasp_donut = self._add_noise(donut_pos + np.array([0.05, 0, 0]), rng)
         target_action = self._solve_right(pre_grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -368,7 +368,7 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 6: Right arm → descend to donut
+        # Phase 6: Right arm → move to donut position
         grasp_donut = self._add_noise(donut_pos, rng)
         target_action = self._solve_right(grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
