@@ -81,6 +81,9 @@ class BiSO101Env(gym.Env):
         self._box_grasp_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "box_grasp_site")
         self._donut_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "donut_site")
 
+        self._eq_left_box_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, "left_grip_box")
+        self._eq_right_donut_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_EQUALITY, "right_grip_donut")
+
         ctrl_low = np.array([self.model.actuator_ctrlrange[i, 0] for i in self._actuator_ids], dtype=np.float32)
         ctrl_high = np.array([self.model.actuator_ctrlrange[i, 1] for i in self._actuator_ids], dtype=np.float32)
 
@@ -159,6 +162,9 @@ class BiSO101Env(gym.Env):
         self.data.qpos[box_addr + 2] = 0.42
         self.data.qpos[box_addr + 3] = 1.0
         self.data.qpos[box_addr + 4:box_addr + 7] = 0.0
+
+        self.data.eq_active[self._eq_left_box_id] = 0
+        self.data.eq_active[self._eq_right_donut_id] = 0
 
         mujoco.mj_forward(self.model, self.data)
         self._step_count = 0

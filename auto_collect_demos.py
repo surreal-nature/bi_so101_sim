@@ -1,12 +1,14 @@
 """Automated demo collection with IK and motion planning for bimanual SO-101.
 
 Generates demonstrations of the donut packing task using Jacobian-based inverse
-kinematics and waypoint interpolation. Saves to LeRobot v3.0 dataset format.
+kinematics and waypoint interpolation. Uses MuJoCo weld constraints for reliable
+object attachment during grasping/holding. Saves to LeRobot v3.0 dataset format.
 
 Task sequence:
-  1. Left arm picks up box, holds it in the air
-  2. Right arm picks up donut, places it in the held box
-  3. Left arm puts box back on table
+  1. Left arm grasps box by the wall edge (side approach)
+  2. Left arm lifts box while right arm approaches donut (coordinated)
+  3. Right arm picks up donut, places it in the held box
+  4. Left arm puts box back on table
 
 Usage:
     python auto_collect_demos.py --n-episodes 50 --force
@@ -139,6 +141,15 @@ class AutoCollector:
         self._right_joint_indices = list(range(6, 11))
         self._right_gripper_index = 11
 
+        self._left_gripper_body_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_BODY, "left_gripper_body")
+        self._right_gripper_body_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_BODY, "right_gripper_body")
+        self._box_body_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_BODY, "box")
+        self._donut_body_id = mujoco.mj_name2id(
+            env.model, mujoco.mjtObj.mjOBJ_BODY, "donut")
+
     def _get_current_action(self):
         return self.env._get_joint_positions().copy()
 
@@ -182,6 +193,33 @@ class AutoCollector:
             new_action[self._right_gripper_index] = value
         return new_action
 
+    def _activate_weld(self, eq_id, body1_id, body2_id):
+        """Activate a weld constraint, computing relative pose from current state."""
+        b1_pos = self.env.data.xpos[body1_id].copy()
+        b1_mat = self.env.data.xmat[body1_id].reshape(3, 3)
+        b2_pos = self.env.data.xpos[body2_id].copy()
+
+        b2_quat = np.zeros(4)
+        mujoco.mju_mat2Quat(b2_quat, self.env.data.xmat[body2_id])
+        b1_quat = np.zeros(4)
+        mujoco.mju_mat2Quat(b1_quat, self.env.data.xmat[body1_id])
+
+        rel_pos = b1_mat.T @ (b2_pos - b1_pos)
+
+        b1_quat_conj = b1_quat.copy()
+        b1_quat_conj[1:] *= -1
+        rel_quat = np.zeros(4)
+        mujoco.mju_mulQuat(rel_quat, b1_quat_conj, b2_quat)
+
+        self.env.model.eq_data[eq_id, 0:3] = 0
+        self.env.model.eq_data[eq_id, 3:6] = rel_pos
+        self.env.model.eq_data[eq_id, 6:10] = rel_quat
+
+        self.env.data.eq_active[eq_id] = 1
+
+    def _deactivate_weld(self, eq_id):
+        self.env.data.eq_active[eq_id] = 0
+
     def _add_noise(self, pos, rng):
         if self.noise_scale > 0:
             return pos + rng.normal(0, self.noise_scale, size=3)
@@ -198,6 +236,9 @@ class AutoCollector:
         self.env.reset(seed=ep_seed)
         mujoco.mj_forward(self.env.model, self.env.data)
 
+        self._deactivate_weld(self.env._eq_left_box_id)
+        self._deactivate_weld(self.env._eq_right_donut_id)
+
         initial_qpos = self.env.data.qpos.copy()
         initial_qvel = self.env.data.qvel.copy()
 
@@ -209,44 +250,43 @@ class AutoCollector:
 
         current_action = self._get_current_action()
 
-        # Phase 1: Left arm → pre-grasp above box
-        pre_grasp_box = self._add_noise(box_pos + np.array([0, 0, 0.06]), rng)
+        # Phase 1: Left arm → approach box from the left side (horizontal)
+        pre_grasp_box = self._add_noise(box_pos + np.array([-0.04, 0, 0]), rng)
         target_action = self._solve_left(pre_grasp_box, current_action)
         n = self._noisy_steps(60, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 2: Left arm → grasp box (move down)
+        # Phase 2: Left arm → move to box grasp site
         grasp_box = self._add_noise(box_pos, rng)
         target_action = self._solve_left(grasp_box, current_action)
         n = self._noisy_steps(30, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 3: Left arm close gripper
+        # Phase 3: Left arm close gripper + activate weld
         target_action = self._set_gripper(current_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(15, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
+        self._activate_weld(
+            self.env._eq_left_box_id,
+            self._left_gripper_body_id,
+            self._box_body_id,
+        )
 
-        # Phase 4: Left arm lifts box
+        # Phase 4: Left arm lifts box + right arm approaches donut (coordinated)
         hold_pos = np.array([box_pos[0], box_pos[1], 0.55])
         hold_pos = self._add_noise(hold_pos, rng)
+        pre_grasp_donut = self._add_noise(donut_pos + np.array([0, 0, 0.06]), rng)
         target_action = self._solve_left(hold_pos, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
-        n = self._noisy_steps(40, rng)
-        self._interpolate_and_step(current_action, target_action, n, states, actions_list)
-        current_action = target_action
-
-        # Phase 5: Right arm → pre-grasp above donut
-        pre_grasp_donut = self._add_noise(donut_pos + np.array([0, 0, 0.06]), rng)
-        target_action = self._solve_right(pre_grasp_donut, current_action)
-        target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
+        target_action = self._solve_right(pre_grasp_donut, target_action)
         n = self._noisy_steps(60, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 6: Right arm → grasp donut
+        # Phase 5: Right arm → move to donut grasp position
         grasp_donut = self._add_noise(donut_pos, rng)
         target_action = self._solve_right(grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -254,25 +294,19 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 7: Right arm close gripper
+        # Phase 6: Right arm close gripper + activate weld
         target_action = self._set_gripper(current_action, "right", GRIPPER_CLOSED)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(15, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
+        self._activate_weld(
+            self.env._eq_right_donut_id,
+            self._right_gripper_body_id,
+            self._donut_body_id,
+        )
 
-        # Phase 8: Right arm lifts donut
-        lift_donut = np.array([donut_pos[0], donut_pos[1], 0.55])
-        lift_donut = self._add_noise(lift_donut, rng)
-        target_action = self._solve_right(lift_donut, current_action)
-        target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
-        target_action = self._set_gripper(target_action, "right", GRIPPER_CLOSED)
-        n = self._noisy_steps(30, rng)
-        self._interpolate_and_step(current_action, target_action, n, states, actions_list)
-        current_action = target_action
-
-        # Phase 9: Right arm → above held box
-        # The box is now held by left arm at hold_pos; target above it
+        # Phase 7: Right arm lifts donut + moves above held box (both welds active)
         above_box_held = hold_pos + np.array([0, 0, 0.06])
         target_action = self._solve_right(above_box_held, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -281,7 +315,7 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 10: Right arm → place donut in box (move down into box)
+        # Phase 8: Right arm places donut into box
         into_box = hold_pos + np.array([0, 0, 0.02])
         target_action = self._solve_right(into_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -290,22 +324,15 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 11: Right arm open gripper (release donut)
+        # Phase 9: Right arm open gripper + deactivate donut weld
+        self._deactivate_weld(self.env._eq_right_donut_id)
         target_action = self._set_gripper(current_action, "right", GRIPPER_OPEN)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(15, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 12: Right arm retreat up
-        retreat = hold_pos + np.array([0, 0, 0.08])
-        target_action = self._solve_right(retreat, current_action)
-        target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
-        n = self._noisy_steps(30, rng)
-        self._interpolate_and_step(current_action, target_action, n, states, actions_list)
-        current_action = target_action
-
-        # Phase 13: Right arm → home (all zeros for right joints)
+        # Phase 10: Right arm retreat to home
         target_action = current_action.copy()
         for idx in self._right_joint_indices:
             target_action[idx] = 0.0
@@ -315,7 +342,7 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 14: Left arm → table position (put box back)
+        # Phase 11: Left arm lowers box to table + deactivate box weld + open gripper
         table_pos = np.array([box_pos[0], box_pos[1], 0.44])
         table_pos = self._add_noise(table_pos, rng)
         target_action = self._solve_left(table_pos, current_action)
@@ -324,13 +351,13 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 15: Left arm open gripper (release box)
+        self._deactivate_weld(self.env._eq_left_box_id)
         target_action = self._set_gripper(current_action, "left", GRIPPER_OPEN)
         n = self._noisy_steps(15, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 16: Left arm → home
+        # Phase 12: Left arm return to home
         target_action = current_action.copy()
         for idx in self._left_joint_indices:
             target_action[idx] = 0.0
@@ -407,6 +434,8 @@ class AutoCollector:
 
         self.env.data.qpos[:] = initial_qpos
         self.env.data.qvel[:] = initial_qvel
+        self._deactivate_weld(self.env._eq_left_box_id)
+        self._deactivate_weld(self.env._eq_right_donut_id)
         mujoco.mj_forward(self.env.model, self.env.data)
 
         for i in range(n_frames):
