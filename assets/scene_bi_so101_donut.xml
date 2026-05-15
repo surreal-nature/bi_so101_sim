@@ -67,7 +67,7 @@
     </body>
 
     <!-- Donut (cylinder approximation - graspable object) -->
-    <body name="donut" pos="0.08 0.0 0.44">
+    <body name="donut" pos="0.03 0.0 0.44">
       <freejoint name="donut_joint"/>
       <geom name="donut_geom" type="cylinder" size="0.025 0.012" material="donut_material" mass="0.05"
             contype="1" conaffinity="1" condim="4" friction="0.8 0.02 0.01"/>
@@ -75,7 +75,7 @@
     </body>
 
     <!-- Box (open-top container on the left side) -->
-    <body name="box" pos="-0.12 0.0 0.42">
+    <body name="box" pos="-0.05 0.0 0.42">
       <geom name="box_bottom" type="box" size="0.05 0.05 0.005" pos="0 0 0" material="box_material" mass="0.2"
             contype="1" conaffinity="1"/>
       <geom name="box_wall1" type="box" size="0.05 0.005 0.03" pos="0 0.045 0.03" material="box_material"
@@ -91,7 +91,7 @@
 
     <!-- ==================== LEFT ARM ==================== -->
     <!-- Positioned on the left side of the table, facing right -->
-    <body name="left_base" pos="-0.22 0.0 0.42" quat="0.707107 0 0 0.707107">
+    <body name="left_base" pos="-0.18 0.0 0.42" quat="0.707107 0 0 0.707107">
       <inertial pos="0.0137179 -5.19711e-05 0.0334843" mass="0.147" fullinertia="0.000114686 0.000136117 0.000130364 -4.59787e-07 4.97151e-06 9.75275e-08"/>
       <geom type="mesh" class="so101_visual" pos="-0.00636471 -9.94414e-05 -0.0024" quat="0.5 0.5 0.5 0.5" mesh="base_motor_holder_so101_v1" material="arm_body_left"/>
       <geom type="mesh" class="so101_visual" pos="-0.00636471 -8.97657e-09 -0.0024" quat="0.5 0.5 0.5 0.5" mesh="base_so101_v2" material="arm_body_left"/>
@@ -158,7 +158,7 @@
 
     <!-- ==================== RIGHT ARM ==================== -->
     <!-- Positioned on the right side of the table, facing left -->
-    <body name="right_base" pos="0.22 0.0 0.42" quat="0.707107 0 0 -0.707107">
+    <body name="right_base" pos="0.18 0.0 0.42" quat="0.707107 0 0 -0.707107">
       <inertial pos="0.0137179 -5.19711e-05 0.0334843" mass="0.147" fullinertia="0.000114686 0.000136117 0.000130364 -4.59787e-07 4.97151e-06 9.75275e-08"/>
       <geom type="mesh" class="so101_visual" pos="-0.00636471 -9.94414e-05 -0.0024" quat="0.5 0.5 0.5 0.5" mesh="base_motor_holder_so101_v1" material="arm_body_right"/>
       <geom type="mesh" class="so101_visual" pos="-0.00636471 -8.97657e-09 -0.0024" quat="0.5 0.5 0.5 0.5" mesh="base_so101_v2" material="arm_body_right"/>
