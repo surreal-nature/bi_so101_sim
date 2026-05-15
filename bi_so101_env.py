@@ -47,7 +47,7 @@ class BiSO101Env(gym.Env):
         img_width: int = IMG_WIDTH,
         render_mode: str = "rgb_array",
         success_threshold: float = 0.03,
-        donut_x_range: tuple[float, float] = (-0.02, 0.08),
+        donut_x_range: tuple[float, float] = (0.0, 0.08),
         donut_y_range: tuple[float, float] = (-0.05, 0.05),
     ):
         super().__init__()
@@ -140,7 +140,7 @@ class BiSO101Env(gym.Env):
             donut_x = self.np_random.uniform(*self.donut_x_range)
             donut_y = self.np_random.uniform(*self.donut_y_range)
         else:
-            donut_x = 0.03
+            donut_x = 0.05
             donut_y = 0.0
 
         addr = self._donut_qpos_addr
