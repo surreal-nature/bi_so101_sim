@@ -23,8 +23,6 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 
 import mujoco
 import numpy as np
-import torch
-
 sys.path.insert(0, os.path.dirname(__file__))
 from bi_so101_env import JOINT_NAMES, BiSO101Env
 
@@ -358,36 +356,36 @@ class AutoCollector:
         features = {
             "observation.state": {
                 "dtype": "float32",
-                "shape": [12],
+                "shape": (12,),
                 "names": JOINT_NAMES_DOT,
             },
             "observation.images.top_camera": {
                 "dtype": "video",
-                "shape": [480, 640, 3],
+                "shape": (480, 640, 3),
                 "names": ["height", "width", "channels"],
                 "info": video_info,
             },
             "observation.images.front_camera": {
                 "dtype": "video",
-                "shape": [480, 640, 3],
+                "shape": (480, 640, 3),
                 "names": ["height", "width", "channels"],
                 "info": video_info,
             },
             "observation.images.left_wrist_camera": {
                 "dtype": "video",
-                "shape": [480, 640, 3],
+                "shape": (480, 640, 3),
                 "names": ["height", "width", "channels"],
                 "info": video_info,
             },
             "observation.images.right_wrist_camera": {
                 "dtype": "video",
-                "shape": [480, 640, 3],
+                "shape": (480, 640, 3),
                 "names": ["height", "width", "channels"],
                 "info": video_info,
             },
             "action": {
                 "dtype": "float32",
-                "shape": [12],
+                "shape": (12,),
                 "names": JOINT_NAMES_DOT,
             },
         }
@@ -414,12 +412,12 @@ class AutoCollector:
         for i in range(n_frames):
             obs = self.env._get_obs()
             frame = {
-                "observation.state": torch.from_numpy(states[i]),
+                "observation.state": states[i],
                 "observation.images.top_camera": obs["pixels/top_camera"],
                 "observation.images.front_camera": obs["pixels/front_camera"],
                 "observation.images.left_wrist_camera": obs["pixels/left_wrist_camera"],
                 "observation.images.right_wrist_camera": obs["pixels/right_wrist_camera"],
-                "action": torch.from_numpy(actions_list[i]),
+                "action": actions_list[i],
                 "task": self.task_description,
             }
             dataset.add_frame(frame)
