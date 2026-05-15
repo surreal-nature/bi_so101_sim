@@ -171,6 +171,13 @@ class AutoCollector:
         self.env.data.ctrl[self.env._actuator_ids] = clipped
         for _ in range(self.env._n_substeps):
             mujoco.mj_step(self.env.model, self.env.data)
+            for i, jid in enumerate(self.env._joint_ids):
+                if i == self._left_gripper_index or i == self._right_gripper_index:
+                    continue
+                addr = self.env.model.jnt_qposadr[jid]
+                self.env.data.qpos[addr] = clipped[i]
+                dof = self.env.model.jnt_dofadr[jid]
+                self.env.data.qvel[dof] = 0
             if self._attachments:
                 self._enforce_attachments()
             for jid, saved in self._frozen_joints.items():
@@ -178,8 +185,7 @@ class AutoCollector:
                 self.env.data.qpos[addr:addr + 7] = saved
                 dof_addr = self.env.model.jnt_dofadr[jid]
                 self.env.data.qvel[dof_addr:dof_addr + 6] = 0
-            if self._attachments or self._frozen_joints:
-                mujoco.mj_forward(self.env.model, self.env.data)
+            mujoco.mj_forward(self.env.model, self.env.data)
         self.env._step_count += 1
 
     def _interpolate_and_step(self, start_action, end_action, n_steps, states, actions):
@@ -251,18 +257,27 @@ class AutoCollector:
         for body_id in list(self._saved_contacts.keys()):
             self._restore_body_contacts(body_id)
 
-    def _attach(self, gripper_body_id, obj_body_id, obj_joint_id, keep_upright=False):
-        """Record relative pose for kinematic attachment and disable object contacts."""
-        b2_pos = self.env.data.xpos[obj_body_id].copy()
+    def _attach(self, gripper_body_id, obj_body_id, obj_joint_id,
+                keep_upright=False, rel_pos_override=None):
+        """Record relative pose for kinematic attachment and disable object contacts.
 
+        rel_pos_override: when provided for keep_upright mode, uses this fixed
+        world-frame offset instead of computing from simulation state. Prevents
+        offset errors caused by servo tracking lag.
+        """
         if keep_upright:
-            site_id = (self._left_gc_site_id if gripper_body_id == self._left_gripper_body_id
-                       else self._right_gc_site_id)
-            ref_pos = self.env.data.site_xpos[site_id].copy()
-            rel_pos = b2_pos - ref_pos
+            if rel_pos_override is not None:
+                rel_pos = np.array(rel_pos_override, dtype=np.float64)
+            else:
+                b2_pos = self.env.data.xpos[obj_body_id].copy()
+                site_id = (self._left_gc_site_id if gripper_body_id == self._left_gripper_body_id
+                           else self._right_gc_site_id)
+                ref_pos = self.env.data.site_xpos[site_id].copy()
+                rel_pos = b2_pos - ref_pos
             rel_quat = np.array([1.0, 0.0, 0.0, 0.0])
         else:
             b1_pos = self.env.data.xpos[gripper_body_id].copy()
+            b2_pos = self.env.data.xpos[obj_body_id].copy()
             b1_mat = self.env.data.xmat[gripper_body_id].reshape(3, 3)
             b1_quat = np.zeros(4)
             mujoco.mju_mat2Quat(b1_quat, self.env.data.xmat[gripper_body_id])
@@ -325,8 +340,8 @@ class AutoCollector:
         mujoco.mj_forward(self.env.model, self.env.data)
         self._attachments = []
         self._restore_all_contacts()
+        self._frozen_joints = {}
 
-        # Let objects settle on the table before capturing positions
         for _ in range(200):
             mujoco.mj_step(self.env.model, self.env.data)
         mujoco.mj_forward(self.env.model, self.env.data)
@@ -335,7 +350,13 @@ class AutoCollector:
         initial_qvel = self.env.data.qvel.copy()
 
         donut_pos = self.env.data.site_xpos[self.env._donut_site_id].copy()
-        box_pos = self.env.data.site_xpos[self.env._box_grasp_site_id].copy()
+        box_grasp_pos = self.env.data.site_xpos[self.env._box_grasp_site_id].copy()
+
+        # Geometric offsets: object body position relative to grasp center
+        # box_grasp_site is at [0, 0.045, 0.055] in box body frame
+        box_rel_pos = np.array([0.0, -0.045, -0.055])
+        # donut_site is at [0, 0, 0] in donut body frame
+        donut_rel_pos = np.array([0.0, 0.0, 0.0])
 
         states = []
         actions_list = []
@@ -347,16 +368,16 @@ class AutoCollector:
         attach_events.append((len(actions_list), "freeze", self._box_joint_id))
         self._freeze_object(self._box_joint_id)
 
-        # Phase 1: Left arm → approach box from +y direction (open gripper)
-        pre_grasp_box = self._add_noise(box_pos + np.array([0, 0.05, 0]), rng)
+        # Phase 1: Left arm approach box from +y (front wall direction)
+        pre_grasp_box = self._add_noise(box_grasp_pos + np.array([0, 0.05, 0]), rng)
         target_action = self._solve_left(pre_grasp_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
         n = self._noisy_steps(60, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 2: Left arm → move to box front wall rim
-        grasp_box = self._add_noise(box_pos, rng)
+        # Phase 2: Left arm to box front wall rim
+        grasp_box = self._add_noise(box_grasp_pos, rng)
         target_action = self._solve_left(grasp_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
         n = self._noisy_steps(40, rng)
@@ -367,19 +388,19 @@ class AutoCollector:
         attach_events.append((len(actions_list), "unfreeze", self._box_joint_id))
         self._unfreeze_object(self._box_joint_id)
 
-        # Phase 3: Left arm close gripper + attach box
+        # Phase 3: Left arm close gripper + attach box with geometric offset
         target_action = self._set_gripper(current_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(15, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
         attach_events.append((len(actions_list), "attach",
                               self._left_gripper_body_id, self._box_body_id,
-                              self._box_joint_id, True))
+                              self._box_joint_id, True, box_rel_pos))
         self._attach(self._left_gripper_body_id, self._box_body_id,
-                     self._box_joint_id, keep_upright=True)
+                     self._box_joint_id, keep_upright=True, rel_pos_override=box_rel_pos)
 
-        # Phase 4: Left arm lifts box (only left arm moves)
-        hold_pos = np.array([-0.05, 0.05, 0.50])
+        # Phase 4: Left arm lifts box to centered hold position
+        hold_pos = np.array([0.0, 0.0, 0.50])
         hold_pos = self._add_noise(hold_pos, rng)
         target_action = self._solve_left(hold_pos, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -394,7 +415,7 @@ class AutoCollector:
         attach_events.append((len(actions_list), "freeze", self._donut_joint_id))
         self._freeze_object(self._donut_joint_id)
 
-        # Phase 5a: Right arm → intermediate position (avoids servo stalling)
+        # Phase 5a: Right arm to intermediate position
         intermediate = self._add_noise(np.array([0.10, -0.10, 0.48]), rng)
         target_action = self._solve_right(intermediate, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
@@ -403,7 +424,7 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 5b: Right arm → pre-grasp above donut
+        # Phase 5b: Right arm pre-grasp above donut
         pre_grasp_donut = self._add_noise(donut_pos + np.array([0, 0, 0.03]), rng)
         target_action = self._solve_right(pre_grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
@@ -412,7 +433,7 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 6: Right arm → descend to donut position
+        # Phase 6: Right arm descend to donut
         grasp_donut = self._add_noise(donut_pos, rng)
         target_action = self._solve_right(grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
@@ -425,7 +446,7 @@ class AutoCollector:
         attach_events.append((len(actions_list), "unfreeze", self._donut_joint_id))
         self._unfreeze_object(self._donut_joint_id)
 
-        # Phase 7: Right arm close gripper + attach donut
+        # Phase 7: Right arm close gripper + attach donut with geometric offset
         target_action = self._set_gripper(current_action, "right", GRIPPER_CLOSED)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(15, rng)
@@ -433,11 +454,11 @@ class AutoCollector:
         current_action = target_action
         attach_events.append((len(actions_list), "attach",
                               self._right_gripper_body_id, self._donut_body_id,
-                              self._donut_joint_id, True))
+                              self._donut_joint_id, True, donut_rel_pos))
         self._attach(self._right_gripper_body_id, self._donut_body_id,
-                     self._donut_joint_id, keep_upright=True)
+                     self._donut_joint_id, keep_upright=True, rel_pos_override=donut_rel_pos)
 
-        # Phase 8: Right arm lifts donut above held box
+        # Phase 8: Right arm lifts donut above box opening
         above_box = box_held_center + np.array([0, 0, 0.08])
         target_action = self._solve_right(above_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -446,8 +467,8 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 9: Right arm places donut into box
-        into_box = box_held_center + np.array([0, 0, 0.02])
+        # Phase 9: Right arm lowers donut into box center
+        into_box = box_held_center.copy()
         target_action = self._solve_right(into_box, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         target_action = self._set_gripper(target_action, "right", GRIPPER_CLOSED)
@@ -455,9 +476,18 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 10: Right arm open gripper + detach donut
+        # Phase 10: Right arm open gripper, detach donut from right, re-attach to left
         attach_events.append((len(actions_list), "detach", self._donut_body_id))
         self._detach(self._donut_body_id)
+        # Re-attach donut to left arm so it follows box during lowering
+        donut_to_left_offset = box_held_center - hold_pos
+        attach_events.append((len(actions_list), "attach",
+                              self._left_gripper_body_id, self._donut_body_id,
+                              self._donut_joint_id, True, donut_to_left_offset))
+        self._attach(self._left_gripper_body_id, self._donut_body_id,
+                     self._donut_joint_id, keep_upright=True,
+                     rel_pos_override=donut_to_left_offset)
+
         target_action = self._set_gripper(current_action, "right", GRIPPER_OPEN)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(15, rng)
@@ -474,14 +504,16 @@ class AutoCollector:
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
-        # Phase 12: Left arm lowers box to table + detach + open gripper
-        table_pos = self._add_noise(box_pos.copy(), rng)
+        # Phase 12: Left arm lowers box+donut to table, detach both, open gripper
+        table_pos = self._add_noise(box_grasp_pos.copy(), rng)
         target_action = self._solve_left(table_pos, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(40, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
+        attach_events.append((len(actions_list), "detach", self._donut_body_id))
+        self._detach(self._donut_body_id)
         attach_events.append((len(actions_list), "detach", self._box_body_id))
         self._detach(self._box_body_id)
         target_action = self._set_gripper(current_action, "left", GRIPPER_OPEN)
@@ -578,8 +610,11 @@ class AutoCollector:
             while event_idx < len(attach_events) and attach_events[event_idx][0] == i:
                 ev = attach_events[event_idx]
                 if ev[1] == "attach":
+                    keep_upright = ev[5] if len(ev) > 5 else False
+                    rel_override = ev[6] if len(ev) > 6 else None
                     self._attach(ev[2], ev[3], ev[4],
-                                 keep_upright=ev[5] if len(ev) > 5 else False)
+                                 keep_upright=keep_upright,
+                                 rel_pos_override=rel_override)
                 elif ev[1] == "detach":
                     self._detach(ev[2])
                 elif ev[1] == "freeze":
