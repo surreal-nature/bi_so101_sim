@@ -101,7 +101,7 @@ class BiSO101Env(gym.Env):
             }
         )
 
-        self._renderer = mujoco.Renderer(self.model, img_height, img_width)
+        self._renderer = None
         self._step_count = 0
         self._donut_qpos_addr = self.model.jnt_qposadr[self._donut_joint_id]
 
@@ -112,6 +112,8 @@ class BiSO101Env(gym.Env):
         )
 
     def _render_camera(self, camera_name: str) -> np.ndarray:
+        if self._renderer is None:
+            self._renderer = mujoco.Renderer(self.model, self.img_height, self.img_width)
         self._renderer.update_scene(self.data, camera=camera_name)
         return self._renderer.render().copy()
 
@@ -177,4 +179,5 @@ class BiSO101Env(gym.Env):
         return None
 
     def close(self):
-        self._renderer.close()
+        if self._renderer is not None:
+            self._renderer.close()

@@ -18,7 +18,7 @@ import os
 import sys
 import time
 
-os.environ.setdefault("MUJOCO_GL", "glfw")
+os.environ.setdefault("MUJOCO_GL", "egl")
 
 import mujoco
 import mujoco.viewer
@@ -69,12 +69,14 @@ class TeleopCollector:
         self._left_gripper_open = True
         self._right_gripper_open = True
         self._pressed_keys: set[str] = set()
-        self._episode_frames: list[dict] = []
+        self._episode_states: list[np.ndarray] = []
+        self._episode_actions: list[np.ndarray] = []
+        self._initial_qpos = None
+        self._initial_qvel = None
         self._episodes_saved = 0
         self._should_save = False
         self._should_discard = False
         self._should_quit = False
-        self._recording = True
         self._episode_ended = False
 
     def _key_callback(self, keycode, action_type):
@@ -176,17 +178,52 @@ class TeleopCollector:
         )
         return dataset
 
+    def _save_initial_state(self):
+        self._initial_qpos = self.env.data.qpos.copy()
+        self._initial_qvel = self.env.data.qvel.copy()
+
+    def _step_physics(self, action: np.ndarray):
+        clipped = np.clip(action, self.env.action_space.low, self.env.action_space.high)
+        self.env.data.ctrl[self.env._actuator_ids] = clipped
+        for _ in range(self.env._n_substeps):
+            mujoco.mj_step(self.env.model, self.env.data)
+        self.env._step_count += 1
+
     def _save_episode_to_dataset(self, dataset):
-        if len(self._episode_frames) == 0:
+        n_frames = len(self._episode_actions)
+        if n_frames == 0:
             print("No frames to save, skipping.")
             return
 
-        for frame in self._episode_frames:
+        print(f"Rendering {n_frames} frames...")
+
+        self.env.data.qpos[:] = self._initial_qpos
+        self.env.data.qvel[:] = self._initial_qvel
+        mujoco.mj_forward(self.env.model, self.env.data)
+
+        for i in range(n_frames):
+            obs = self.env._get_obs()
+            frame = {
+                "observation.state": self._episode_states[i],
+                "observation.images.top_camera": obs["pixels/top_camera"],
+                "observation.images.front_camera": obs["pixels/front_camera"],
+                "observation.images.left_wrist_camera": obs["pixels/left_wrist_camera"],
+                "observation.images.right_wrist_camera": obs["pixels/right_wrist_camera"],
+                "action": self._episode_actions[i],
+                "task": self.task_description,
+            }
             dataset.add_frame(frame)
+
+            self._step_physics(self._episode_actions[i])
+
+            if (i + 1) % 100 == 0:
+                print(f"  {i + 1}/{n_frames} frames rendered")
+
         dataset.save_episode()
         self._episodes_saved += 1
-        print(f"Episode {self._episodes_saved} saved ({len(self._episode_frames)} frames)")
-        self._episode_frames = []
+        print(f"Episode {self._episodes_saved} saved ({n_frames} frames)")
+        self._episode_states = []
+        self._episode_actions = []
 
     def run(self):
         print("=" * 60)
@@ -199,9 +236,11 @@ class TeleopCollector:
 
         dataset = self._create_dataset()
 
-        obs, _ = self.env.reset(seed=42)
-        current_pos = obs["agent_pos"].copy()
+        self.env.reset(seed=42)
+        mujoco.mj_forward(self.env.model, self.env.data)
+        current_pos = self.env._get_joint_positions()
         self._target_pos = current_pos.copy()
+        self._save_initial_state()
 
         def key_callback(keycode):
             self._key_callback(keycode, 1)
@@ -216,11 +255,14 @@ class TeleopCollector:
                 step_start = time.time()
 
                 if self._should_discard:
-                    print(f"Episode discarded ({len(self._episode_frames)} frames)")
-                    self._episode_frames = []
-                    obs, _ = self.env.reset()
-                    current_pos = obs["agent_pos"].copy()
+                    print(f"Episode discarded ({len(self._episode_actions)} frames)")
+                    self._episode_states = []
+                    self._episode_actions = []
+                    self.env.reset()
+                    mujoco.mj_forward(self.env.model, self.env.data)
+                    current_pos = self.env._get_joint_positions()
                     self._target_pos = current_pos.copy()
+                    self._save_initial_state()
                     self._left_gripper_open = True
                     self._right_gripper_open = True
                     self._should_discard = False
@@ -230,9 +272,11 @@ class TeleopCollector:
 
                 if self._should_save:
                     self._save_episode_to_dataset(dataset)
-                    obs, _ = self.env.reset()
-                    current_pos = obs["agent_pos"].copy()
+                    self.env.reset()
+                    mujoco.mj_forward(self.env.model, self.env.data)
+                    current_pos = self.env._get_joint_positions()
                     self._target_pos = current_pos.copy()
+                    self._save_initial_state()
                     self._left_gripper_open = True
                     self._right_gripper_open = True
                     self._should_save = False
@@ -243,24 +287,20 @@ class TeleopCollector:
                 if not self._episode_ended:
                     action = self._compute_action()
 
-                    frame = {
-                        "observation.state": current_pos.copy(),
-                        "observation.images.top_camera": obs["pixels/top_camera"],
-                        "observation.images.front_camera": obs["pixels/front_camera"],
-                        "observation.images.left_wrist_camera": obs["pixels/left_wrist_camera"],
-                        "observation.images.right_wrist_camera": obs["pixels/right_wrist_camera"],
-                        "action": action.copy(),
-                        "task": self.task_description,
-                    }
-                    self._episode_frames.append(frame)
+                    self._episode_states.append(current_pos.copy())
+                    self._episode_actions.append(action.copy())
                     frame_count += 1
 
-                    obs, reward, terminated, truncated, info = self.env.step(action)
-                    current_pos = obs["agent_pos"].copy()
+                    self._step_physics(action)
+                    current_pos = self.env._get_joint_positions()
+
+                    success = self.env._check_success()
+                    terminated = success
+                    truncated = self.env._step_count >= self.env.max_episode_steps
 
                     if terminated or truncated:
                         elapsed = time.time() - episode_start_time
-                        status = "SUCCESS" if info["is_success"] else "timeout"
+                        status = "SUCCESS" if success else "timeout"
                         print(f"Episode ended ({status}, {frame_count} frames, {elapsed:.1f}s)")
                         print("Press X to save, Z to discard")
                         self._episode_ended = True
@@ -274,7 +314,7 @@ class TeleopCollector:
                     time.sleep(sleep_time)
 
         # Save any remaining episode
-        if len(self._episode_frames) > 0:
+        if len(self._episode_actions) > 0:
             print("Saving final episode...")
             self._save_episode_to_dataset(dataset)
 
