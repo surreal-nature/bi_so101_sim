@@ -262,7 +262,9 @@
   </actuator>
 
   <equality>
-    <weld name="left_grip_box" body1="left_gripper_body" body2="box" active="false"/>
-    <weld name="right_grip_donut" body1="right_gripper_body" body2="donut" active="false"/>
+    <weld name="left_grip_box" body1="left_gripper_body" body2="box" active="false"
+          solref="0.001 1" solimp="0.999 0.9999 0.0001"/>
+    <weld name="right_grip_donut" body1="right_gripper_body" body2="donut" active="false"
+          solref="0.001 1" solimp="0.999 0.9999 0.0001"/>
   </equality>
 </mujoco>

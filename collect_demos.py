@@ -110,8 +110,8 @@ class TeleopCollector:
 
         self._pressed_keys.clear()
 
-        self._target_pos[5] = 0.0 if self._left_gripper_open else 1.5
-        self._target_pos[11] = 0.0 if self._right_gripper_open else 1.5
+        self._target_pos[5] = 1.5 if self._left_gripper_open else -0.175
+        self._target_pos[11] = 1.5 if self._right_gripper_open else -0.175
 
         self._target_pos = np.clip(self._target_pos, self.env.action_space.low, self.env.action_space.high)
         return self._target_pos.copy()
