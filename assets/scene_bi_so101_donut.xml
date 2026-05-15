@@ -89,7 +89,7 @@
     </body>
 
     <!-- Box (open-top container on the left side) -->
-    <body name="box" pos="-0.08 0.0 0.425">
+    <body name="box" pos="-0.08 0.0 0.43">
       <freejoint name="box_joint"/>
       <geom name="box_bottom" type="box" size="0.05 0.05 0.005" pos="0 0 0" material="box_material" mass="0.2"
             contype="1" conaffinity="1"/>

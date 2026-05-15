@@ -159,7 +159,7 @@ class BiSO101Env(gym.Env):
         box_addr = self._box_qpos_addr
         self.data.qpos[box_addr] = -0.08
         self.data.qpos[box_addr + 1] = 0.0
-        self.data.qpos[box_addr + 2] = 0.425
+        self.data.qpos[box_addr + 2] = 0.43
         self.data.qpos[box_addr + 3] = 1.0
         self.data.qpos[box_addr + 4:box_addr + 7] = 0.0
 
