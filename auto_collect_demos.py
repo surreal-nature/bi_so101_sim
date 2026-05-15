@@ -202,7 +202,7 @@ class AutoCollector:
             new_action[self._right_gripper_index] = value
         return new_action
 
-    def _attach(self, gripper_body_id, obj_body_id, obj_joint_id):
+    def _attach(self, gripper_body_id, obj_body_id, obj_joint_id, keep_upright=False):
         """Record relative pose for kinematic attachment."""
         b1_pos = self.env.data.xpos[gripper_body_id].copy()
         b1_mat = self.env.data.xmat[gripper_body_id].reshape(3, 3)
@@ -220,7 +220,7 @@ class AutoCollector:
         mujoco.mju_mulQuat(rel_quat, b1_quat_conj, b2_quat)
 
         self._attachments.append((gripper_body_id, obj_body_id, obj_joint_id,
-                                  rel_pos, rel_quat))
+                                  rel_pos, rel_quat, keep_upright))
 
     def _detach(self, obj_body_id):
         """Remove kinematic attachment for an object."""
@@ -228,15 +228,19 @@ class AutoCollector:
 
     def _enforce_attachments(self):
         """Set attached objects' qpos to maintain relative pose with gripper."""
-        for gripper_body_id, obj_body_id, obj_joint_id, rel_pos, rel_quat in self._attachments:
+        for gripper_body_id, obj_body_id, obj_joint_id, rel_pos, rel_quat, keep_upright in self._attachments:
             b1_pos = self.env.data.xpos[gripper_body_id]
             b1_mat = self.env.data.xmat[gripper_body_id].reshape(3, 3)
             b1_quat = np.zeros(4)
             mujoco.mju_mat2Quat(b1_quat, self.env.data.xmat[gripper_body_id])
 
             world_pos = b1_pos + b1_mat @ rel_pos
-            world_quat = np.zeros(4)
-            mujoco.mju_mulQuat(world_quat, b1_quat, rel_quat)
+
+            if keep_upright:
+                world_quat = np.array([1.0, 0.0, 0.0, 0.0])
+            else:
+                world_quat = np.zeros(4)
+                mujoco.mju_mulQuat(world_quat, b1_quat, rel_quat)
 
             addr = self.env.model.jnt_qposadr[obj_joint_id]
             self.env.data.qpos[addr:addr + 3] = world_pos
@@ -261,6 +265,11 @@ class AutoCollector:
         self.env.reset(seed=ep_seed)
         mujoco.mj_forward(self.env.model, self.env.data)
         self._attachments = []
+
+        # Let objects settle on the table before capturing positions
+        for _ in range(200):
+            mujoco.mj_step(self.env.model, self.env.data)
+        mujoco.mj_forward(self.env.model, self.env.data)
 
         initial_qpos = self.env.data.qpos.copy()
         initial_qvel = self.env.data.qvel.copy()
@@ -297,9 +306,9 @@ class AutoCollector:
         current_action = target_action
         attach_events.append((len(actions_list), "attach",
                               self._left_gripper_body_id, self._box_body_id,
-                              self._box_joint_id))
+                              self._box_joint_id, True))
         self._attach(self._left_gripper_body_id, self._box_body_id,
-                     self._box_joint_id)
+                     self._box_joint_id, keep_upright=True)
 
         # Phase 4: Left arm lifts box to center + right arm approaches donut (coordinated)
         hold_pos = np.array([0.0, 0.0, 0.50])
@@ -314,7 +323,8 @@ class AutoCollector:
         current_action = target_action
 
         # Phase 5: Right arm → move to donut grasp position
-        grasp_donut = self._add_noise(donut_pos, rng)
+        # Offset slightly below donut center so fingertips align with donut
+        grasp_donut = self._add_noise(donut_pos + np.array([0, 0, -0.005]), rng)
         target_action = self._solve_right(grasp_donut, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         target_action = self._set_gripper(target_action, "right", GRIPPER_OPEN)
@@ -330,7 +340,7 @@ class AutoCollector:
         current_action = target_action
         attach_events.append((len(actions_list), "attach",
                               self._right_gripper_body_id, self._donut_body_id,
-                              self._donut_joint_id))
+                              self._donut_joint_id, False))
         self._attach(self._right_gripper_body_id, self._donut_body_id,
                      self._donut_joint_id)
 
@@ -372,8 +382,7 @@ class AutoCollector:
         current_action = target_action
 
         # Phase 11: Left arm lowers box to table + detach box + open gripper
-        table_pos = np.array([-0.08, 0.0, 0.44])
-        table_pos = self._add_noise(table_pos, rng)
+        table_pos = self._add_noise(box_pos.copy(), rng)
         target_action = self._solve_left(table_pos, current_action)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
         n = self._noisy_steps(40, rng)
@@ -474,7 +483,8 @@ class AutoCollector:
             while event_idx < len(attach_events) and attach_events[event_idx][0] == i:
                 ev = attach_events[event_idx]
                 if ev[1] == "attach":
-                    self._attach(ev[2], ev[3], ev[4])
+                    self._attach(ev[2], ev[3], ev[4],
+                                 keep_upright=ev[5] if len(ev) > 5 else False)
                 else:
                     self._detach(ev[2])
                 event_idx += 1

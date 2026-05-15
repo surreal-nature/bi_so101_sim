@@ -67,7 +67,7 @@
     </body>
 
     <!-- Donut (torus approximation - 8 capsules in a ring, R=0.012m, r=0.004m, outer diameter 32mm) -->
-    <body name="donut" pos="0.05 0.0 0.44">
+    <body name="donut" pos="0.05 0.0 0.424">
       <freejoint name="donut_joint"/>
       <geom name="donut_0" type="capsule" size="0.004" fromto="0.01109 -0.00459 0 0.01109 0.00459 0"
             material="donut_material" mass="0.00625" contype="1" conaffinity="1" condim="4" friction="0.8 0.02 0.01"/>
@@ -89,7 +89,7 @@
     </body>
 
     <!-- Box (open-top container on the left side) -->
-    <body name="box" pos="-0.08 0.0 0.42">
+    <body name="box" pos="-0.08 0.0 0.425">
       <freejoint name="box_joint"/>
       <geom name="box_bottom" type="box" size="0.05 0.05 0.005" pos="0 0 0" material="box_material" mass="0.2"
             contype="1" conaffinity="1"/>
