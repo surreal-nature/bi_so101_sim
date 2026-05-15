@@ -74,6 +74,7 @@ class TeleopCollector:
         self._should_discard = False
         self._should_quit = False
         self._recording = True
+        self._episode_ended = False
 
     def _key_callback(self, keycode, action_type):
         key_char = chr(keycode).lower() if 32 <= keycode < 127 else ""
@@ -217,25 +218,6 @@ class TeleopCollector:
             while viewer.is_running() and not self._should_quit:
                 step_start = time.time()
 
-                action = self._compute_action(current_pos)
-
-                frame = {
-                    "observation.state": current_pos.copy(),
-                    "observation.images.top_camera": obs["pixels/top_camera"],
-                    "observation.images.front_camera": obs["pixels/front_camera"],
-                    "observation.images.left_wrist_camera": obs["pixels/left_wrist_camera"],
-                    "observation.images.right_wrist_camera": obs["pixels/right_wrist_camera"],
-                    "action": action.copy(),
-                    "task": self.task_description,
-                }
-                self._episode_frames.append(frame)
-                frame_count += 1
-
-                obs, reward, terminated, truncated, info = self.env.step(action)
-                current_pos = obs["agent_pos"].copy()
-
-                viewer.sync()
-
                 if self._should_discard:
                     print(f"Episode discarded ({len(self._episode_frames)} frames)")
                     self._episode_frames = []
@@ -244,6 +226,7 @@ class TeleopCollector:
                     self._left_gripper_open = True
                     self._right_gripper_open = True
                     self._should_discard = False
+                    self._episode_ended = False
                     episode_start_time = time.time()
                     frame_count = 0
 
@@ -254,14 +237,36 @@ class TeleopCollector:
                     self._left_gripper_open = True
                     self._right_gripper_open = True
                     self._should_save = False
+                    self._episode_ended = False
                     episode_start_time = time.time()
                     frame_count = 0
 
-                if terminated or truncated:
-                    elapsed = time.time() - episode_start_time
-                    status = "SUCCESS" if info["is_success"] else "timeout"
-                    print(f"Episode ended ({status}, {frame_count} frames, {elapsed:.1f}s)")
-                    print("Press X to save, Z to discard")
+                if not self._episode_ended:
+                    action = self._compute_action(current_pos)
+
+                    frame = {
+                        "observation.state": current_pos.copy(),
+                        "observation.images.top_camera": obs["pixels/top_camera"],
+                        "observation.images.front_camera": obs["pixels/front_camera"],
+                        "observation.images.left_wrist_camera": obs["pixels/left_wrist_camera"],
+                        "observation.images.right_wrist_camera": obs["pixels/right_wrist_camera"],
+                        "action": action.copy(),
+                        "task": self.task_description,
+                    }
+                    self._episode_frames.append(frame)
+                    frame_count += 1
+
+                    obs, reward, terminated, truncated, info = self.env.step(action)
+                    current_pos = obs["agent_pos"].copy()
+
+                    if terminated or truncated:
+                        elapsed = time.time() - episode_start_time
+                        status = "SUCCESS" if info["is_success"] else "timeout"
+                        print(f"Episode ended ({status}, {frame_count} frames, {elapsed:.1f}s)")
+                        print("Press X to save, Z to discard")
+                        self._episode_ended = True
+
+                viewer.sync()
 
                 # Maintain target FPS
                 elapsed = time.time() - step_start
