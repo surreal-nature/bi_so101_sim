@@ -411,11 +411,21 @@ class AutoCollector:
         attach_events.append((len(actions_list), "freeze", self._box_joint_id))
         self._freeze_object(self._box_joint_id)
 
-        # Phase 1: Left arm approach box from +y with fingers oriented to straddle wall
-        pre_grasp_box = self._add_noise(box_grasp_pos + np.array([0, 0.05, 0]), rng)
+        # Phase 0: Left arm approaches ABOVE the box wall (z=0.55, well above wall top at ~0.49)
+        high_approach = self._add_noise(
+            np.array([box_grasp_pos[0], box_grasp_pos[1] + 0.03, 0.55]), rng)
+        target_action = self._solve_left_oriented(high_approach, current_action, LEFT_ROLL)
+        target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
+        n = self._noisy_steps(50, rng)
+        self._interpolate_and_step(current_action, target_action, n, states, actions_list)
+        current_action = target_action
+
+        # Phase 1: Descend to wall rim level (gripper straddles from above, not through)
+        pre_grasp_box = self._add_noise(
+            np.array([box_grasp_pos[0], box_grasp_pos[1] + 0.02, box_grasp_pos[2]]), rng)
         target_action = self._solve_left_oriented(pre_grasp_box, current_action, LEFT_ROLL)
         target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
-        n = self._noisy_steps(60, rng)
+        n = self._noisy_steps(40, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
@@ -423,7 +433,7 @@ class AutoCollector:
         grasp_box = self._add_noise(box_grasp_pos, rng)
         target_action = self._solve_left_oriented(grasp_box, current_action, LEFT_ROLL)
         target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
-        n = self._noisy_steps(40, rng)
+        n = self._noisy_steps(30, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
 
@@ -441,8 +451,8 @@ class AutoCollector:
         self._attach(self._left_gripper_body_id, self._box_body_id,
                      self._box_joint_id, keep_upright=True, rel_pos_override=box_rel_pos)
 
-        # Phase 4: Left arm lifts box to hold position
-        hold_pos = np.array([0.0, 0.0, 0.50])
+        # Phase 4: Left arm lifts box to hold position (shifted left, away from donut area)
+        hold_pos = np.array([-0.06, 0.02, 0.50])
         hold_pos = self._add_noise(hold_pos, rng)
         target_action = self._solve_left_oriented(hold_pos, current_action, LEFT_ROLL)
         target_action = self._set_gripper(target_action, "left", GRIPPER_CLOSED)
@@ -573,10 +583,29 @@ class AutoCollector:
         self._detach(self._donut_body_id)
         attach_events.append((len(actions_list), "detach", self._box_body_id))
         self._detach(self._box_body_id)
+
+        attach_events.append((len(actions_list), "freeze", self._box_joint_id))
+        self._freeze_object(self._box_joint_id)
+        attach_events.append((len(actions_list), "freeze", self._donut_joint_id))
+        self._freeze_object(self._donut_joint_id)
+
         target_action = self._set_gripper(current_action, "left", GRIPPER_OPEN)
         n = self._noisy_steps(15, rng)
         self._interpolate_and_step(current_action, target_action, n, states, actions_list)
         current_action = target_action
+
+        # Phase 12.5: Left arm lifts up to clear the box before retreating
+        lift_away = np.array([box_grasp_pos[0], box_grasp_pos[1] + 0.03, 0.55])
+        target_action = self._solve_left_oriented(lift_away, current_action, LEFT_ROLL)
+        target_action = self._set_gripper(target_action, "left", GRIPPER_OPEN)
+        n = self._noisy_steps(30, rng)
+        self._interpolate_and_step(current_action, target_action, n, states, actions_list)
+        current_action = target_action
+
+        attach_events.append((len(actions_list), "unfreeze", self._box_joint_id))
+        self._unfreeze_object(self._box_joint_id)
+        attach_events.append((len(actions_list), "unfreeze", self._donut_joint_id))
+        self._unfreeze_object(self._donut_joint_id)
 
         # Phase 13: Left arm return to home
         target_action = current_action.copy()

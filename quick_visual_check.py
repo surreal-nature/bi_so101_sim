@@ -23,23 +23,27 @@ n_frames = len(actions_list)
 print(f"Generated {n_frames} frames")
 
 # Key frame indices to render (approximate phase boundaries)
+# Auto-detect total frames and spread key frames
 key_frames = {
     0: "initial",
-    60: "phase1_approach",
-    100: "phase2_at_wall",
-    115: "phase3_gripper_closed",
-    175: "phase4_box_lifted",
-    235: "phase5a_right_intermediate",
-    295: "phase5b_right_pregrasp",
-    325: "phase6_right_at_donut",
-    340: "phase7_donut_grasped",
-    380: "phase7.5_donut_lifted",
-    420: "phase8_above_box",
-    450: "phase9_donut_in_box",
-    465: "phase10_donut_released",
-    495: "phase10.5_right_retreating",
-    535: "phase12_lowering",
-    570: "phase12_at_table",
+    50: "phase0_high_approach",
+    90: "phase1_descend_to_wall",
+    120: "phase2_at_wall",
+    135: "phase3_gripper_closed",
+    195: "phase4_box_lifted",
+    255: "phase5a_right_intermediate",
+    315: "phase5b_right_pregrasp",
+    345: "phase6_right_at_donut",
+    360: "phase7_donut_grasped",
+    400: "phase7.5_donut_lifted",
+    440: "phase8_above_box",
+    470: "phase9_donut_in_box",
+    485: "phase10_donut_released",
+    515: "phase10.5_right_retreating",
+    555: "phase11_right_home",
+    595: "phase12_lowering",
+    625: "phase12.5_lift_away",
+    660: "phase13_home",
 }
 
 # Replay and render key frames
